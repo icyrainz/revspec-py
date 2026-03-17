@@ -57,6 +57,26 @@ class ReviewState:
             if t.status not in ("resolved", "outdated"):
                 t.status = "resolved"
 
+    def resolve_all_pending(self) -> None:
+        """Resolve only threads with pending status (AI-replied). Matches TS resolveAllPending."""
+        for t in self.threads:
+            if t.status == "pending":
+                t.status = "resolved"
+
+    def next_unread_thread(self) -> int | None:
+        unread = [t for t in self.threads if t.id in self._unread_thread_ids]
+        after = [t for t in unread if t.line > self.cursor_line]
+        if after:
+            return min(t.line for t in after)
+        return min((t.line for t in unread), default=None)
+
+    def prev_unread_thread(self) -> int | None:
+        unread = [t for t in self.threads if t.id in self._unread_thread_ids]
+        before = [t for t in unread if t.line < self.cursor_line]
+        if before:
+            return max(t.line for t in before)
+        return max((t.line for t in unread), default=None)
+
     def delete_thread(self, thread_id: str) -> None:
         self.threads = [t for t in self.threads if t.id != thread_id]
         self._unread_thread_ids.discard(thread_id)
