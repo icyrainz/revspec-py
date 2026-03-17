@@ -83,9 +83,15 @@ class SpecPager(Static):
             content_style = self._line_style(line, in_code_block, is_cursor)
             content = line if line else " "
 
-            # Search highlighting
-            if self.search_query and self.search_query.lower() in content.lower():
-                self._append_highlighted(text, content, self.search_query, content_style, is_cursor)
+            # Search highlighting — smartcase
+            if self.search_query:
+                cs = self.search_query != self.search_query.lower()
+                q = self.search_query if cs else self.search_query.lower()
+                hay = content if cs else content.lower()
+                if q in hay:
+                    self._append_highlighted(text, content, self.search_query, content_style, is_cursor)
+                else:
+                    text.append(content, content_style)
             else:
                 text.append(content, content_style)
 
@@ -118,11 +124,12 @@ class SpecPager(Static):
         self, text: Text, content: str, query: str,
         base_style: Style, is_cursor: bool,
     ) -> None:
-        lower_content = content.lower()
-        lower_query = query.lower()
+        case_sensitive = query != query.lower()
+        q = query if case_sensitive else query.lower()
+        haystack = content if case_sensitive else content.lower()
         pos = 0
         while pos < len(content):
-            idx = lower_content.find(lower_query, pos)
+            idx = haystack.find(q, pos)
             if idx == -1:
                 text.append(content[pos:], base_style)
                 break
@@ -314,13 +321,13 @@ class ConfirmScreen(ModalScreen[bool]):
         with Vertical(id="confirm-dialog"):
             yield Static(self.title_text, id="confirm-title")
             yield Static(self.message_text)
-            yield Static("[y/Enter] Confirm  [n/Esc] Cancel", id="confirm-hints")
+            yield Static("[y/Enter] Confirm  [q/Esc] Cancel", id="confirm-hints")
 
     def on_key(self, event: Key) -> None:
         if event.key in ("y", "enter"):
             event.prevent_default()
             self.dismiss(True)
-        elif event.key in ("n", "escape"):
+        elif event.key in ("n", "q", "escape"):
             event.prevent_default()
             self.dismiss(False)
 
@@ -525,6 +532,17 @@ class RevspecApp(App):
         self._pending_key: str | None = None
         self._pending_timer: float = 0
 
+        # Jump list — mirrors vim :jumps (TS app.ts:161-184)
+        self._jump_list: list[int] = [1]
+        self._jump_index: int = 0
+        self.MAX_JUMP_LIST = 50
+
+        # Track scroll position for H/M/L (SpecPager extends Static, no scroll_offset)
+        self._scroll_y: int = 0
+
+        # Transient message timer handle
+        self._message_timer = None
+
     def compose(self) -> ComposeResult:
         yield Static(self._top_bar_text(), id="top-bar")
         self.pager_widget = SpecPager(self.state, id="pager-scroll")
@@ -550,10 +568,16 @@ class RevspecApp(App):
 
         return text
 
-    def _bottom_bar_text(self, message: str | None = None) -> Text:
+    def _bottom_bar_text(self, message: str | None = None, icon: str | None = None) -> Text:
         text = Text()
         if message:
-            text.append(f" {message}", Style(color=THEME["text_muted"]))
+            if icon == "info":
+                text.append(" - ", Style(color=THEME["blue"]))
+            elif icon == "warn":
+                text.append(" ! ", Style(color=THEME["yellow"]))
+            elif icon == "success":
+                text.append(" * ", Style(color=THEME["green"]))
+            text.append(f" {message}" if not icon else message, Style(color=THEME["text_muted"]))
         else:
             line = self.state.cursor_line
             total = self.state.line_count
@@ -577,12 +601,65 @@ class RevspecApp(App):
 
     def _scroll_to_cursor(self) -> None:
         if self.pager_widget:
-            # Each line is 1 row high in our rendering
-            self.pager_widget.scroll_to(y=max(0, self.state.cursor_line - self.size.height // 2))
+            target = max(0, self.state.cursor_line - self.size.height // 2)
+            self._scroll_y = target
+            self.pager_widget.scroll_to(y=target)
 
-    def _show_transient(self, message: str, duration: float = 1.5) -> None:
-        self.query_one("#bottom-bar", Static).update(self._bottom_bar_text(message))
-        self.set_timer(duration, lambda: self.query_one("#bottom-bar", Static).update(self._bottom_bar_text()))
+    def _show_transient(self, message: str, icon: str | None = None, duration: float = 1.5) -> None:
+        if self._message_timer is not None:
+            self._message_timer.stop()
+        self.query_one("#bottom-bar", Static).update(self._bottom_bar_text(message, icon))
+        self._message_timer = self.set_timer(duration, self._clear_transient)
+
+    def _clear_transient(self) -> None:
+        self._message_timer = None
+        self.query_one("#bottom-bar", Static).update(self._bottom_bar_text())
+
+    # --- Jump list ---
+
+    def _push_jump(self) -> None:
+        """Record current position in jump list before a big jump."""
+        cur = self.state.cursor_line
+        if self._jump_index < len(self._jump_list) - 1:
+            self._jump_list[self._jump_index + 1:] = []
+        if self._jump_list and self._jump_list[-1] == cur:
+            return
+        self._jump_list.append(cur)
+        if len(self._jump_list) > self.MAX_JUMP_LIST:
+            self._jump_list.pop(0)
+        self._jump_index = len(self._jump_list) - 1
+
+    def _jump_backward(self) -> None:
+        """Ctrl+O — jump back in jump list."""
+        if self._jump_index == len(self._jump_list) - 1:
+            cur = self.state.cursor_line
+            if self._jump_list[self._jump_index] != cur:
+                self._jump_list.append(cur)
+                if len(self._jump_list) > self.MAX_JUMP_LIST:
+                    self._jump_list.pop(0)
+                self._jump_index = len(self._jump_list) - 1
+        if self._jump_index > 0:
+            self._jump_index -= 1
+            self.state.cursor_line = min(self._jump_list[self._jump_index], self.state.line_count)
+            self._refresh()
+
+    def _jump_forward(self) -> None:
+        """Ctrl+I / Tab — jump forward in jump list."""
+        if self._jump_index < len(self._jump_list) - 1:
+            self._jump_index += 1
+            self.state.cursor_line = min(self._jump_list[self._jump_index], self.state.line_count)
+            self._refresh()
+
+    def _jump_swap(self) -> None:
+        """'' — swap between current position and last jump entry."""
+        if len(self._jump_list) > 1:
+            cur = self.state.cursor_line
+            prev_idx = max(0, self._jump_index - 1)
+            target = self._jump_list[prev_idx]
+            self._jump_list[self._jump_index] = cur
+            self._jump_index = prev_idx
+            self.state.cursor_line = min(target, self.state.line_count)
+            self._refresh()
 
     # --- Multi-key sequence handling ---
 
@@ -608,7 +685,7 @@ class RevspecApp(App):
             return
 
         # Single keys that start sequences
-        if key in ("g", "z", "d", "bracketleft", "bracketright"):
+        if key in ("g", "z", "d", "bracketleft", "bracketright", "apostrophe"):
             event.prevent_default()
             self._pending_key = key
             self._pending_timer = time.monotonic()
@@ -634,8 +711,43 @@ class RevspecApp(App):
                 self.state.cursor_line = max(self.state.cursor_line - half, 1)
                 self._refresh()
             case "shift+g" | "G":
+                self._push_jump()
                 self.state.cursor_line = self.state.line_count
                 self._refresh()
+            case "ctrl+o":
+                self._jump_backward()
+            case "tab":
+                self._jump_forward()
+            case "shift+h" | "H":
+                self._push_jump()
+                scroll_top = self._scroll_y
+                self.state.cursor_line = max(1, min(scroll_top + 1, self.state.line_count))
+                self._refresh()
+            case "shift+m" | "M":
+                self._push_jump()
+                scroll_top = self._scroll_y
+                page_h = max(1, self.size.height - 2)
+                self.state.cursor_line = max(1, min(scroll_top + page_h // 2, self.state.line_count))
+                self._refresh()
+            case "shift+l" | "L":
+                self._push_jump()
+                scroll_top = self._scroll_y
+                page_h = max(1, self.size.height - 2)
+                self.state.cursor_line = max(1, min(scroll_top + page_h - 1, self.state.line_count))
+                self._refresh()
+            case "shift+r" | "R":
+                pending_threads = [t for t in self.state.threads if t.status == "pending"]
+                if not pending_threads:
+                    self._show_transient("No pending threads")
+                else:
+                    self.state.resolve_all_pending()
+                    for t in pending_threads:
+                        append_event(self.jsonl_path, LiveEvent(
+                            type="resolve", thread_id=t.id,
+                            author="reviewer", ts=int(time.time() * 1000),
+                        ))
+                    self._refresh()
+                    self._show_transient(f"Resolved {len(pending_threads)} pending thread(s)", "success")
             case "c":
                 self._open_comment()
             case "t":
@@ -668,26 +780,58 @@ class RevspecApp(App):
     def _handle_sequence(self, seq: str) -> None:
         match seq:
             case "gg":
+                self._push_jump()
                 self.state.cursor_line = 1
                 self._refresh()
             case "zz":
+                if self.pager_widget:
+                    half_view = max(1, self.size.height - 2) // 2
+                    target = max(0, self.state.cursor_line - 1 - half_view)
+                    self._scroll_y = target
+                    self.pager_widget.scroll_to(y=target)
                 self._refresh()
             case "dd":
                 self._delete_thread()
             case "bracketrightt":  # ]t
                 line = self.state.next_thread()
                 if line:
+                    wrapped = line <= self.state.cursor_line
+                    self._push_jump()
                     self.state.cursor_line = line
                     self._refresh()
+                    if wrapped:
+                        self._show_transient("Wrapped to first thread", "info", 1.2)
                 else:
                     self._show_transient("No threads")
             case "bracketleftt":  # [t
                 line = self.state.prev_thread()
                 if line:
+                    wrapped = line >= self.state.cursor_line
+                    self._push_jump()
+                    self.state.cursor_line = line
+                    self._refresh()
+                    if wrapped:
+                        self._show_transient("Wrapped to last thread", "info", 1.2)
+                else:
+                    self._show_transient("No threads")
+            case "bracketrightr":  # ]r next unread
+                line = self.state.next_unread_thread()
+                if line:
+                    self._push_jump()
                     self.state.cursor_line = line
                     self._refresh()
                 else:
-                    self._show_transient("No threads")
+                    self._show_transient("No unread replies")
+            case "bracketleftr":  # [r prev unread
+                line = self.state.prev_unread_thread()
+                if line:
+                    self._push_jump()
+                    self.state.cursor_line = line
+                    self._refresh()
+                else:
+                    self._show_transient("No unread replies")
+            case "apostropheapostrophe":  # ''
+                self._jump_swap()
             case "bracketright1":  # ]1
                 self._jump_heading(1, forward=True)
             case "bracketleft1":   # [1
@@ -706,6 +850,7 @@ class RevspecApp(App):
     def _jump_heading(self, level: int, forward: bool) -> None:
         line = self.state.next_heading(level) if forward else self.state.prev_heading(level)
         if line:
+            self._push_jump()
             self.state.cursor_line = line
             self._refresh()
         else:
@@ -748,6 +893,7 @@ class RevspecApp(App):
 
         def on_result(line: int | None) -> None:
             if line is not None:
+                self._push_jump()
                 self.state.cursor_line = line
                 self._refresh()
 
@@ -796,6 +942,7 @@ class RevspecApp(App):
             if result:
                 query, line = result
                 self.search_query = query
+                self._push_jump()
                 self.state.cursor_line = line
             self._refresh()
 
@@ -803,7 +950,7 @@ class RevspecApp(App):
 
     def _search_next(self, direction: int) -> None:
         if not self.search_query:
-            self._show_transient("No active search — use / to search")
+            self._show_transient("No active search \u2014 use / to search")
             return
         case_sensitive = self.search_query != self.search_query.lower()
         q = self.search_query if case_sensitive else self.search_query.lower()
@@ -812,8 +959,15 @@ class RevspecApp(App):
             i = (self.state.cursor_line - 1 + offset * direction) % total
             line = self.state.spec_lines[i] if case_sensitive else self.state.spec_lines[i].lower()
             if q in line:
-                self.state.cursor_line = i + 1
+                match_line = i + 1
+                wrapped = (direction == 1 and match_line <= self.state.cursor_line) or \
+                          (direction == -1 and match_line >= self.state.cursor_line)
+                self._push_jump()
+                self.state.cursor_line = match_line
                 self._refresh()
+                if wrapped:
+                    msg = "Search wrapped to top" if direction == 1 else "Search wrapped to bottom"
+                    self._show_transient(msg, "info", 1.2)
                 return
         self._show_transient("No matches")
 
@@ -870,7 +1024,7 @@ class RevspecApp(App):
         elif cmd in safe_quit:
             open_c, pending = self.state.active_thread_count()
             if open_c + pending > 0:
-                self._show_transient(f"{open_c + pending} unresolved thread(s). Use :q! to force quit", 2.0)
+                self._show_transient(f"{open_c + pending} unresolved thread(s). Use :q! to force quit", "warn", 2.0)
             else:
                 self._exit_tui("session-end")
         elif cmd == "wrap":
@@ -879,6 +1033,7 @@ class RevspecApp(App):
             try:
                 line_num = int(cmd)
                 if 1 <= line_num <= self.state.line_count:
+                    self._push_jump()
                     self.state.cursor_line = line_num
                     self._refresh()
                 else:
