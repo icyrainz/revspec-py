@@ -307,7 +307,10 @@ class ConfirmScreen(ModalScreen[bool]):
 # ---------------------------------------------------------------------------
 
 class ThreadListScreen(ModalScreen[int | None]):
-    """List all threads for navigation."""
+    """List all threads for navigation. Sorted by status, filterable with Ctrl+F."""
+
+    STATUS_ORDER = {"open": 0, "pending": 1, "resolved": 2}
+    FILTER_CYCLE = ["all", "active", "resolved"]
 
     CSS = """
     ThreadListScreen {
@@ -340,22 +343,38 @@ class ThreadListScreen(ModalScreen[int | None]):
 
     def __init__(self, threads: list[Thread], **kwargs):
         super().__init__(**kwargs)
-        self.threads = threads
+        self._all_threads = [t for t in threads if t.status in ("open", "pending", "resolved")]
+        self._filter_mode = "all"
+        self.threads = self._filtered_sorted()
         self.selected_idx = 0
+
+    def _filtered_sorted(self) -> list[Thread]:
+        if self._filter_mode == "active":
+            filtered = [t for t in self._all_threads if t.status in ("open", "pending")]
+        elif self._filter_mode == "resolved":
+            filtered = [t for t in self._all_threads if t.status == "resolved"]
+        else:
+            filtered = list(self._all_threads)
+        return sorted(filtered, key=lambda t: (self.STATUS_ORDER.get(t.status, 3), t.line))
+
+    def _title_text(self) -> str:
+        active = sum(1 for t in self._all_threads if t.status in ("open", "pending"))
+        total = len(self._all_threads)
+        return f"Threads ({active} active, {total} total) [{self._filter_mode}]"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="thread-list-dialog"):
-            yield Static(f"Threads ({len(self.threads)})", id="thread-list-title")
+            yield Static(self._title_text(), id="thread-list-title")
             for i, t in enumerate(self.threads):
                 icon = STATUS_ICONS.get(t.status, " ")
                 preview = t.messages[0].text[:50] if t.messages else ""
-                label = f" {icon} L{t.line:<4} [{t.status:<8}] {preview}"
+                label = f" {icon} #{t.id} L{t.line}: {preview}"
                 cls = "thread-item-selected" if i == 0 else "thread-item"
                 yield Static(label, id=f"thread-{i}", classes=cls)
-            yield Static("[j/k] Navigate  [Enter] Go to  [Esc] Cancel", id="thread-hints")
+            yield Static("[j/k] Navigate  [Enter] Jump  [Ctrl+f] Filter  [q/Esc] Close", id="thread-hints")
 
     def on_key(self, event: Key) -> None:
-        if event.key == "escape":
+        if event.key in ("escape", "q"):
             event.prevent_default()
             self.dismiss(None)
         elif event.key == "enter":
@@ -368,6 +387,15 @@ class ThreadListScreen(ModalScreen[int | None]):
         elif event.key in ("k", "up"):
             event.prevent_default()
             self._move(-1)
+        elif event.key == "ctrl+f":
+            event.prevent_default()
+            idx = (self.FILTER_CYCLE.index(self._filter_mode) + 1) % 3
+            self._filter_mode = self.FILTER_CYCLE[idx]
+            self.threads = self._filtered_sorted()
+            self.selected_idx = 0
+            # Rebuild display — simplest approach: dismiss and reopen
+            # TODO: dynamic rebuild. For now, update title at minimum.
+            self.query_one("#thread-list-title", Static).update(self._title_text())
 
     def _move(self, delta: int) -> None:
         if not self.threads:
@@ -404,36 +432,57 @@ class HelpScreen(ModalScreen[None]):
         help_text = """\
 [bold #89b4fa]revspec — keyboard reference[/]
 
+[bold]Quick Start[/]
+  Navigate to a line and press c to comment.
+  The AI replies in real-time via the thread popup.
+  Press r to resolve, S to submit for rewrite.
+  Press A to approve when done.
+
+[bold]Thread Popup[/]
+  New thread: INSERT mode (green border) — type and Tab to send.
+  Existing thread: NORMAL mode (blue border) — scroll conversation,
+  c to reply, r to resolve, q/Esc to close.
+
 [bold]Navigation[/]
-  j/k          Cursor down/up
-  Ctrl+D/U     Half-page down/up
-  gg / G       Top / bottom
-  H / M / L    Screen top/mid/bottom
-  zz           Center cursor
+  j/k          Down/up
+  gg/G         Top/bottom
+  Ctrl+D/U     Half page down/up
+  zz           Center cursor line
+  /            Search (smartcase)
+  n/N          Next/prev match
+  Esc          Clear search
+  ]t/[t        Next/prev thread
+  ]r/[r        Next/prev unread
+  ]1/[1        Next/prev h1 heading
+  ]2/[2        Next/prev h2 heading
+  ]3/[3        Next/prev h3 heading
+  Ctrl+O/I     Jump list back/forward
+  ''           Jump to previous position
+  H/M/L        Screen top/middle/bottom
 
-[bold]Threads[/]
-  c            Comment on current line
-  r            Resolve/reopen thread
-  t            Thread list
-  ]t / [t      Next/prev thread
+[bold]Review[/]
+  c            Comment / view thread
+  r            Resolve thread (toggle)
+  R            Resolve all pending
   dd           Delete thread
-
-[bold]Search[/]
-  /            Search
-  n / N        Next/prev match
-
-[bold]Actions[/]
+  t            List threads (Ctrl+F to filter)
   S            Submit for rewrite
-  A            Approve
-  :q           Quit (:q! force)
+  A            Approve spec
 
-[bold]Press Esc or q to close[/]
+[bold]Commands[/]
+  :q/:wq       Quit (warns if unresolved)
+  :q!          Force quit
+  :{N}         Jump to line N
+  :wrap        Toggle line wrapping
+  Ctrl+C       Force quit
+
+[bold]Press q or Esc to close[/]
 """
         with Vertical(id="help-dialog"):
             yield Static(help_text)
 
     def on_key(self, event: Key) -> None:
-        if event.key in ("escape", "q"):
+        if event.key in ("escape", "q", "question_mark"):
             event.prevent_default()
             self.dismiss(None)
 
@@ -516,6 +565,10 @@ class RevspecApp(App):
         # Line wrapping
         self._wrap_enabled = False
 
+        # Spec mutation guard
+        self._spec_mtime = Path(spec_file).stat().st_mtime
+        self._spec_mtime_changed = False
+
     def compose(self) -> ComposeResult:
         yield Static(self._top_bar_text(), id="top-bar")
         self.pager_widget = SpecPager(self.state, id="pager-scroll")
@@ -527,17 +580,51 @@ class RevspecApp(App):
 
     def _top_bar_text(self) -> Text:
         text = Text()
-        text.append(" revspec ", Style(color="#1e1e2e", bgcolor=THEME["blue"], bold=True))
-        text.append(f" {self.spec_file} ", Style(color=THEME["text"]))
+        name = Path(self.spec_file).name
+        text.append(f" {name}", Style(color=THEME["text"], bold=True))
 
-        open_c, pending = self.state.active_thread_count()
-        resolved = sum(1 for t in self.state.threads if t.status == "resolved")
-
+        # Thread progress
         if self.state.threads:
-            text.append(f" [{open_c}o {pending}p {resolved}r]", Style(color=THEME["text_muted"]))
+            resolved = sum(1 for t in self.state.threads if t.status == "resolved")
+            total = len(self.state.threads)
+            color = THEME["green"] if resolved == total else THEME["yellow"]
+            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+            text.append(f"{resolved}/{total} resolved", Style(color=color))
 
+        # Unread replies
         if self.state.unread_count > 0:
-            text.append(f" {self.state.unread_count} unread", Style(color=THEME["yellow"], bold=True))
+            n = self.state.unread_count
+            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+            text.append(
+                f"{n} new {'reply' if n == 1 else 'replies'}",
+                Style(color=THEME["yellow"], bold=True),
+            )
+
+        # Spec mutation guard
+        if hasattr(self, "_spec_mtime_changed") and self._spec_mtime_changed:
+            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+            text.append("!! Spec changed externally", Style(color=THEME["red"], bold=True))
+
+        # Position
+        cur = self.state.cursor_line
+        total = self.state.line_count
+        if cur <= 1:
+            pos_label = "Top"
+        elif cur >= total:
+            pos_label = "Bot"
+        else:
+            pos_label = f"{round((cur - 1) / max(1, total - 1) * 100)}%"
+        text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+        text.append(f"L{cur}/{total} {pos_label}", Style(color=THEME["text_muted"]))
+
+        # Section breadcrumb
+        for i in range(cur - 1, -1, -1):
+            line = self.state.spec_lines[i]
+            m = re.match(r"^(#{1,3})\s+(.+)", line)
+            if m:
+                text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+                text.append(m.group(2).strip(), Style(color=THEME["text_dim"], italic=True))
+                break
 
         return text
 
@@ -552,15 +639,32 @@ class RevspecApp(App):
                 text.append(" * ", Style(color=THEME["green"]))
             text.append(f" {message}" if not icon else message, Style(color=THEME["text_muted"]))
         else:
-            line = self.state.cursor_line
-            total = self.state.line_count
-            pct = int(line / total * 100) if total > 0 else 0
-            text.append(f" L{line}/{total} ({pct}%)", Style(color=THEME["text_dim"]))
-            text.append("  ", Style(color=THEME["text_dim"]))
-            text.append("[c]omment [/]search [t]hreads [?]help", Style(color=THEME["text_dim"]))
+            # Thread preview when cursor is on a thread line
+            thread = self.state.thread_at_line(self.state.cursor_line)
+            if thread and thread.messages and self._message_timer is None:
+                first = thread.messages[0].text.replace("\n", " ")
+                preview = first[:59] + "\u2026" if len(first) > 60 else first
+                replies = len(thread.messages) - 1
+                reply_str = f" ({replies} {'reply' if replies == 1 else 'replies'})" if replies > 0 else ""
+                text.append(f" {preview}{reply_str} [{thread.status}]", Style(color=THEME["text_muted"]))
+            else:
+                line = self.state.cursor_line
+                total = self.state.line_count
+                pct = int(line / total * 100) if total > 0 else 0
+                text.append(f" L{line}/{total} ({pct}%)", Style(color=THEME["text_dim"]))
+                text.append("  ", Style(color=THEME["text_dim"]))
+                text.append("[c]omment [/]search [t]hreads [?]help", Style(color=THEME["text_dim"]))
         return text
 
     def _refresh(self) -> None:
+        # Spec mutation guard
+        try:
+            current_mtime = Path(self.spec_file).stat().st_mtime
+            if current_mtime != self._spec_mtime:
+                self._spec_mtime_changed = True
+        except OSError:
+            pass
+
         if self.pager_widget:
             self.pager_widget.cursor_line = self.state.cursor_line
             if self.search_query:
