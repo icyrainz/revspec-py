@@ -196,7 +196,7 @@ def _word_wrap_count(text: str, width: int) -> int:
     remaining = text
     while len(remaining) > width:
         break_at = remaining.rfind(" ", 0, width)
-        if break_at <= 0:
+        if break_at < 0:
             break_at = width
         remaining = remaining[break_at:].lstrip(" ")
         count += 1

@@ -18,7 +18,7 @@ from .protocol import Thread, Message
 from .theme import THEME
 
 
-def _render_hints(mode: str) -> Text:
+def _render_hints(mode: str, resolved: bool = False) -> Text:
     """Render hint bar with colored mode label and key brackets."""
     text = Text()
     if mode == "normal":
@@ -28,12 +28,13 @@ def _render_hints(mode: str) -> Text:
         text.append(" reply", Style(color=THEME["text_muted"]))
         text.append("  ")
         text.append("[r]", Style(color=THEME["blue"]))
-        text.append(" resolve", Style(color=THEME["text_muted"]))
+        resolve_label = " reopen" if resolved else " resolve"
+        text.append(resolve_label, Style(color=THEME["text_muted"]))
         text.append("  ")
         text.append("[q/Esc]", Style(color=THEME["blue"]))
         text.append(" close", Style(color=THEME["text_muted"]))
     else:
-        text.append(" [INSERT]", Style(color=THEME["green"], bold=True))
+        text.append(" [INSERT]", Style(color=THEME["mauve"], bold=True))
         text.append("  ")
         text.append("[Tab]", Style(color=THEME["blue"]))
         text.append(" send", Style(color=THEME["text_muted"]))
@@ -140,18 +141,19 @@ class CommentScreen(ModalScreen[CommentResult]):
     def on_mount(self) -> None:
         # Set border title
         thread = self.existing_thread
-        title = (
-            f" Thread #{thread.id} (line {self.line}) "
-            if thread and thread.id
-            else f" New comment on line {self.line} "
-        )
+        if thread and thread.id:
+            status_label = thread.status.upper() if thread.status else "OPEN"
+            title = f" Thread #{thread.id} (line {self.line}) [{status_label}] "
+        else:
+            title = f" New comment on line {self.line} "
         dialog = self.query_one("#comment-dialog", Vertical)
         dialog.border_title = title
-        # Set initial mode — TS keeps blue border for new threads (no enterInsert call)
+        # Set initial mode
         if self._mode == "insert":
-            # New thread: focus textarea + update hints, but keep blue border
             self.query_one("#comment-input", TextArea).focus()
             self.query_one("#comment-hints", Static).update(_render_hints("insert"))
+            dialog.styles.border = ("solid", THEME["mauve"])
+            dialog.styles.border_title_color = THEME["mauve"]
         else:
             self._enter_normal()
         # Configure textarea theme
@@ -181,7 +183,23 @@ class CommentScreen(ModalScreen[CommentResult]):
     def update_title(self, thread_id: str, line: int) -> None:
         """Update dialog title after new thread creation."""
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.border_title = f" Thread #{thread_id} (line {line}) "
+        dialog.border_title = f" Thread #{thread_id} (line {line}) [OPEN] "
+
+    def update_status(self, status: str) -> None:
+        """Update status indicator, border color, and hints after resolve/unresolve."""
+        thread = self.existing_thread
+        if not thread:
+            return
+        status_label = status.upper()
+        resolved = status == "resolved"
+        border_color = THEME["green"] if resolved else THEME["blue"]
+        dialog = self.query_one("#comment-dialog", Vertical)
+        dialog.border_title = f" Thread #{thread.id} (line {self.line}) [{status_label}] "
+        # Update border color and hints if in normal mode
+        if self._mode == "normal":
+            dialog.styles.border = ("solid", border_color)
+            dialog.styles.border_title_color = border_color
+            self.query_one("#comment-hints", Static).update(_render_hints("normal", resolved=resolved))
 
     def add_message(self, msg: Message) -> None:
         """Push a message into the conversation (for live watcher)."""
@@ -195,16 +213,18 @@ class CommentScreen(ModalScreen[CommentResult]):
         textarea.focus()
         self.query_one("#comment-hints", Static).update(_render_hints("insert"))
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.styles.border = ("solid", THEME["green"])
-        dialog.styles.border_title_color = THEME["green"]
+        dialog.styles.border = ("solid", THEME["mauve"])
+        dialog.styles.border_title_color = THEME["mauve"]
 
     def _enter_normal(self) -> None:
         self._mode = "normal"
         self.query_one("#comment-history", VerticalScroll).focus()
-        self.query_one("#comment-hints", Static).update(_render_hints("normal"))
+        resolved = self.existing_thread and self.existing_thread.status == "resolved"
+        self.query_one("#comment-hints", Static).update(_render_hints("normal", resolved=bool(resolved)))
+        border_color = THEME["green"] if resolved else THEME["blue"]
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.styles.border = ("solid", THEME["blue"])
-        dialog.styles.border_title_color = THEME["blue"]
+        dialog.styles.border = ("solid", border_color)
+        dialog.styles.border_title_color = border_color
 
     def on_key(self, event: Key) -> None:
         # Ctrl+C force dismisses from any mode
@@ -238,8 +258,7 @@ class CommentScreen(ModalScreen[CommentResult]):
                 self._on_submit(text)
             # Append to conversation display
             self.add_message(Message(author="reviewer", text=text, ts=int(_time.time() * 1000)))
-            # Clear textarea and switch to normal
-            self._enter_normal()
+            # Clear textarea — stay in insert mode for chat-like flow
             textarea.clear()
         # All other keys pass through to textarea
 

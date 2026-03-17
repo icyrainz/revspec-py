@@ -43,6 +43,9 @@ def run_watch(spec_file: str) -> None:
             if result.approved:
                 print("Review approved.")
                 _cleanup(lock_path, offset_path)
+            elif result.session_ended:
+                sys.stdout.write(result.output)
+                _cleanup(lock_path, offset_path)
             elif result.output:
                 sys.stdout.write(result.output)
             return
@@ -58,6 +61,11 @@ def run_watch(spec_file: str) -> None:
 
             if result.approved:
                 print("Review approved.")
+                _cleanup(lock_path, offset_path)
+                return
+
+            if result.session_ended:
+                sys.stdout.write(result.output)
                 _cleanup(lock_path, offset_path)
                 return
 
@@ -78,9 +86,10 @@ def run_watch(spec_file: str) -> None:
 # --- Internal helpers ---
 
 class _ProcessResult:
-    __slots__ = ("approved", "output", "new_offset")
-    def __init__(self, approved=False, output="", new_offset=0):
+    __slots__ = ("approved", "session_ended", "output", "new_offset")
+    def __init__(self, approved=False, session_ended=False, output="", new_offset=0):
         self.approved = approved
+        self.session_ended = session_ended
         self.output = output
         self.new_offset = new_offset
 
@@ -137,6 +146,7 @@ def _process_new_events(
     if any(e.type == "session-end" for e in events):
         return _ProcessResult(
             output="Session ended. Reviewer exited revspec.\n",
+            session_ended=True,
             new_offset=new_offset,
         )
 

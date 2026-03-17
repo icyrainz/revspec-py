@@ -33,7 +33,7 @@ from .comment_screen import CommentScreen, CommentResult
 from .markdown import (
     scan_table_blocks, render_table_border, render_table_separator,
     render_table_row, parse_table_cells, TableBlock,
-    count_extra_visual_lines, parse_inline_markdown,
+    parse_inline_markdown,
 )
 
 
@@ -67,6 +67,7 @@ class SpecPager(ScrollView):
         self.state = state
         self._table_blocks: dict[int, TableBlock] | None = None
         self.wrap_width: int = 0  # 0 = no wrapping
+        self.show_line_numbers: bool = True
         # Visual row model: list of tuples describing each visual row
         # Each entry: ("spec", spec_index) | ("table_border", spec_index, "top"/"bottom")
         self._visual_rows: list[tuple] = []
@@ -75,6 +76,12 @@ class SpecPager(ScrollView):
         # Map from spec line number (1-based) to first visual row index
         self._spec_to_visual: dict[int, int] = {}
         self._rich_console = Console(width=200, no_color=False)
+
+    def _gutter_width(self) -> tuple[int, int]:
+        """Return (num_width, gutter_total) based on show_line_numbers."""
+        num_width = max(len(str(len(self.state.spec_lines))), 3) if self.show_line_numbers else 0
+        gutter_total = (2 + num_width + 2) if self.show_line_numbers else 3  # prefix + indicator + space
+        return num_width, gutter_total
 
     def invalidate_table_cache(self) -> None:
         self._table_blocks = None
@@ -93,8 +100,7 @@ class SpecPager(ScrollView):
             self._table_blocks = scan_table_blocks(lines)
 
         width = self.size.width if self.size.width > 0 else 200
-        num_width = max(len(str(len(lines))), 3)
-        gutter_total = 2 + num_width + 2
+        _, gutter_total = self._gutter_width()
         content_width = width - gutter_total if self.wrap_width > 0 else 0
 
         rows: list[tuple] = []
@@ -190,8 +196,7 @@ class SpecPager(ScrollView):
 
         row = self._visual_rows[virtual_y]
         lines = self.state.spec_lines
-        num_width = max(len(str(len(lines))), 3)
-        gutter_total = 2 + num_width + 2
+        num_width, gutter_total = self._gutter_width()
         gutter_blank = " " * gutter_total
         width = self.size.width
         content_width = width - gutter_total
@@ -269,8 +274,11 @@ class SpecPager(ScrollView):
             text.append(" ", Style(bgcolor=cursor_bg))
 
         # Line number
-        num_str = f"{line_num:>{num_width}}  "
-        text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
+        if self.show_line_numbers:
+            num_str = f"{line_num:>{num_width}}  "
+            text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
+        else:
+            text.append(" ", Style(bgcolor=cursor_bg))
 
         # Content
         if is_table:
@@ -771,12 +779,24 @@ class HelpScreen(ModalScreen[None]):
   S            Submit for rewrite
   A            Approve spec
 
+[bold]Toggles[/]
+  \\w           Toggle line wrapping
+  \\n           Toggle line numbers
+
+[bold]Other[/]
+  Ctrl+R       Reload spec
+  Ctrl+C       Force quit
+
 [bold]Commands[/]
   :q/:wq       Quit (warns if unresolved)
   :q!          Force quit
   :{{N}}         Jump to line N
   :wrap        Toggle line wrapping
-  Ctrl+C       Force quit
+  :submit      Submit for rewrite (same as S)
+  :approve     Approve spec (same as A)
+  :resolve     Resolve thread (same as r)
+  :reload      Reload spec (same as Ctrl+R)
+  :help        Show this help (same as ?)
 
 [bold]Press q or Esc to close[/]
 """
@@ -953,6 +973,7 @@ class RevspecApp(App):
         self._pending_key: str | None = None
         self._pending_timer: float = 0
         self._pending_key_timer: object | None = None
+        self._build_sequence_maps()
 
         # Jump list — mirrors vim :jumps (TS app.ts:161-184)
         self._jump_list: list[int] = [1]
@@ -992,6 +1013,26 @@ class RevspecApp(App):
         if not self.state.threads:
             self._show_transient("Navigate to a line and press c to comment  |  ? for help", "info", 8.0)
 
+    def _do_reload(self, new_content: str, new_mtime: float) -> None:
+        """Shared reload logic — reset state, re-replay JSONL, reset UI."""
+        self.state.reset(new_content.split("\n"))
+        # Re-replay JSONL to restore thread state
+        if os.path.exists(self.jsonl_path):
+            events, _ = read_events(self.jsonl_path)
+            for t in replay_events_to_threads(events):
+                self.state.threads.append(t)
+        self._spec_mtime = new_mtime
+        self._spec_mtime_changed = False
+        self.search_query = None
+        self._jump_list = [1]
+        self._jump_index = 0
+        if self.pager_widget:
+            self.pager_widget.invalidate_table_cache()
+        if os.path.exists(self.jsonl_path):
+            self._live_watcher_offset = os.path.getsize(self.jsonl_path)
+        else:
+            self._live_watcher_offset = 0
+
     def _check_spec_reload(self) -> None:
         """Poll spec file mtime for reload after submit."""
         try:
@@ -1004,22 +1045,24 @@ class RevspecApp(App):
                 if isinstance(self.screen, SpinnerScreen):
                     self.screen.dismiss("success")
                 new_content = Path(self.spec_file).read_text(encoding="utf-8")
-                self.state.reset(new_content.split("\n"))
-                self._spec_mtime = current_mtime
-                self._spec_mtime_changed = False
-                self.search_query = None
-                self._jump_list = [1]
-                self._jump_index = 0
-                if self.pager_widget:
-                    self.pager_widget.invalidate_table_cache()
-                # Reset live watcher offset for new round
-                if os.path.exists(self.jsonl_path):
-                    self._live_watcher_offset = os.path.getsize(self.jsonl_path)
-                else:
-                    self._live_watcher_offset = 0
+                self._do_reload(new_content, current_mtime)
                 # _refresh() and transient deferred to on_spinner_done("success")
         except OSError:
             pass
+
+    def _reload_spec(self) -> None:
+        """Manual spec reload (Ctrl+R)."""
+        try:
+            current_mtime = Path(self.spec_file).stat().st_mtime
+            if current_mtime == self._spec_mtime:
+                self._show_transient("Spec is up to date", "info", 1.5)
+                return
+            new_content = Path(self.spec_file).read_text(encoding="utf-8")
+            self._do_reload(new_content, current_mtime)
+            self._refresh()
+            self._show_transient("Spec reloaded", "success", 1.5)
+        except OSError:
+            self._show_transient("Failed to reload spec", "warn", 2.0)
 
     def _check_live_events(self) -> None:
         """Poll JSONL for owner events (AI replies)."""
@@ -1097,7 +1140,7 @@ class RevspecApp(App):
         # Spec mutation guard
         if hasattr(self, "_spec_mtime_changed") and self._spec_mtime_changed:
             text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-            text.append("!! Spec changed externally", Style(color=THEME["red"], bold=True))
+            text.append("!! Spec changed externally (Ctrl+R to reload)", Style(color=THEME["red"], bold=True))
 
         # Position
         cur = self.state.cursor_line
@@ -1274,6 +1317,7 @@ class RevspecApp(App):
             self.query_one("#bottom-bar", Static).update(self._bottom_bar_text())
             return k
         self._pending_key = None
+        self._cancel_pending_hint_timer()
         return None
 
     def _cancel_pending_hint_timer(self) -> None:
@@ -1286,6 +1330,51 @@ class RevspecApp(App):
         """Restore the bottom bar after the pending key times out."""
         self._pending_key_timer = None
         self.query_one("#bottom-bar", Static).update(self._bottom_bar_text())
+
+    # --- Key sequence registry ---
+    # Each entry: (internal_seq_key, display_hint, hint_label, handler_name)
+    # handler_name is resolved to self.<name> at dispatch time.
+    _SEQUENCE_REGISTRY: list[tuple[str, str, str, str]] = [
+        # ]  prefix
+        ("right_square_brackett", "]t", "thread", "_seq_next_thread"),
+        ("right_square_bracketr", "]r", "unread", "_seq_next_unread"),
+        ("right_square_bracket1", "]1", "h1", "_seq_heading_1_fwd"),
+        ("right_square_bracket2", "]2", "h2", "_seq_heading_2_fwd"),
+        ("right_square_bracket3", "]3", "h3", "_seq_heading_3_fwd"),
+        # [  prefix
+        ("left_square_brackett", "[t", "thread", "_seq_prev_thread"),
+        ("left_square_bracketr", "[r", "unread", "_seq_prev_unread"),
+        ("left_square_bracket1", "[1", "h1", "_seq_heading_1_back"),
+        ("left_square_bracket2", "[2", "h2", "_seq_heading_2_back"),
+        ("left_square_bracket3", "[3", "h3", "_seq_heading_3_back"),
+        # g prefix
+        ("gg", "gg", "top", "_seq_go_top"),
+        # z prefix
+        ("zz", "zz", "center", "_seq_center"),
+        # d prefix
+        ("dd", "dd", "delete", "_delete_thread"),
+        # '  prefix
+        ("apostropheapostrophe", "''", "swap", "_jump_swap"),
+        # \  prefix
+        ("backslashw", "\\w", "wrap", "_toggle_wrap"),
+        ("backslashn", "\\n", "lines", "_toggle_line_numbers"),
+    ]
+
+    def _build_sequence_maps(self) -> None:
+        """Build derived maps from _SEQUENCE_REGISTRY. Called once in __init__."""
+        self._seq_handlers: dict[str, str] = {}
+        self._seq_prefix_hints: dict[str, list[tuple[str, str]]] = {}
+        self._seq_prefixes: set[str] = set()
+        for seq_key, display, label, handler in self._SEQUENCE_REGISTRY:
+            assert hasattr(self, handler), f"_SEQUENCE_REGISTRY: unknown handler {handler!r}"
+            self._seq_handlers[seq_key] = handler
+            # Derive prefix by checking which known prefix names are a prefix of seq_key
+            for pname in ("right_square_bracket", "left_square_bracket",
+                          "apostrophe", "backslash", "g", "z", "d"):
+                if seq_key.startswith(pname) and len(seq_key) > len(pname):
+                    self._seq_prefixes.add(pname)
+                    self._seq_prefix_hints.setdefault(pname, []).append((display, label))
+                    break
 
     def on_key(self, event: Key) -> None:
         # Skip key handling when a modal overlay is active
@@ -1300,13 +1389,16 @@ class RevspecApp(App):
         if pending:
             event.prevent_default()
             seq = pending + key
-            if not self._handle_sequence(seq):
+            handler_name = self._seq_handlers.get(seq)
+            if handler_name:
+                getattr(self, handler_name)()
+            else:
                 # Sequence didn't match — re-process second key as standalone
                 self._handle_single_key(event, key)
             return
 
         # Single keys that start sequences
-        if key in ("g", "z", "d", "left_square_bracket", "right_square_bracket", "apostrophe"):
+        if key in self._seq_prefixes:
             event.prevent_default()
             self._start_pending(key)
             return
@@ -1317,17 +1409,21 @@ class RevspecApp(App):
 
     def _start_pending(self, key: str) -> None:
         """Start a pending multi-key sequence."""
+        self._cancel_pending_hint_timer()
         self._pending_key = key
         self._pending_timer = time.monotonic()
-        # Show pending key hint in bottom bar
-        display = {"left_square_bracket": "[", "right_square_bracket": "]", "apostrophe": "'"}.get(key, key)
-        self.query_one("#bottom-bar", Static).update(Text(f" {display}...", Style(color=THEME["text_dim"])))
+        # Show pending key hint in bottom bar with available options
+        hints = self._seq_prefix_hints.get(key)
+        if hints:
+            self.query_one("#bottom-bar", Static).update(self._build_hints(hints))
+        else:
+            self.query_one("#bottom-bar", Static).update(Text(f" {key}...", Style(color=THEME["text_dim"])))
         self._pending_key_timer = self.set_timer(0.3, self._clear_pending_hint)
 
     def _handle_single_key(self, event: Key, key: str) -> None:
         """Process a single key press (non-sequence)."""
         # Check if this key starts a new sequence
-        if key in ("g", "z", "d", "left_square_bracket", "right_square_bracket", "apostrophe"):
+        if key in self._seq_prefixes:
             self._start_pending(key)
             return
 
@@ -1413,6 +1509,8 @@ class RevspecApp(App):
                 self.push_screen(HelpScreen())
             case "colon":
                 self._open_command_mode()
+            case "ctrl+r":
+                self._reload_spec()
             case "escape":
                 if self.search_query:
                     self.search_query = None
@@ -1422,72 +1520,91 @@ class RevspecApp(App):
             case _:
                 pass  # ignore unmapped keys
 
-    def _handle_sequence(self, seq: str) -> bool:
-        """Handle a two-key sequence. Returns True if matched, False otherwise."""
-        match seq:
-            case "gg":
-                self._push_jump()
-                self.state.cursor_line = 1
-                self._refresh()
-            case "zz":
-                self._scroll_to_cursor(center=True)
-            case "dd":
-                self._delete_thread()
-            case "right_square_brackett":  # ]t
-                line = self.state.next_thread()
-                if line:
-                    wrapped = line < self.state.cursor_line
-                    self._push_jump()
-                    self.state.cursor_line = line
-                    self._refresh()
-                    if wrapped:
-                        self._show_transient("Wrapped to first thread", "info", 1.2)
-                else:
-                    self._show_transient("No threads")
-            case "left_square_brackett":  # [t
-                line = self.state.prev_thread()
-                if line:
-                    wrapped = line > self.state.cursor_line
-                    self._push_jump()
-                    self.state.cursor_line = line
-                    self._refresh()
-                    if wrapped:
-                        self._show_transient("Wrapped to last thread", "info", 1.2)
-                else:
-                    self._show_transient("No threads")
-            case "right_square_bracketr":  # ]r next unread
-                line = self.state.next_unread_thread()
-                if line:
-                    self._push_jump()
-                    self.state.cursor_line = line
-                    self._refresh()
-                else:
-                    self._show_transient("No unread replies")
-            case "left_square_bracketr":  # [r prev unread
-                line = self.state.prev_unread_thread()
-                if line:
-                    self._push_jump()
-                    self.state.cursor_line = line
-                    self._refresh()
-                else:
-                    self._show_transient("No unread replies")
-            case "apostropheapostrophe":  # ''
-                self._jump_swap()
-            case "right_square_bracket1":  # ]1
-                self._jump_heading(1, forward=True)
-            case "left_square_bracket1":   # [1
-                self._jump_heading(1, forward=False)
-            case "right_square_bracket2":  # ]2
-                self._jump_heading(2, forward=True)
-            case "left_square_bracket2":   # [2
-                self._jump_heading(2, forward=False)
-            case "right_square_bracket3":  # ]3
-                self._jump_heading(3, forward=True)
-            case "left_square_bracket3":   # [3
-                self._jump_heading(3, forward=False)
-            case _:
-                return False
-        return True
+    # --- Sequence handler methods (referenced by _SEQUENCE_REGISTRY) ---
+
+    def _seq_go_top(self) -> None:
+        self._push_jump()
+        self.state.cursor_line = 1
+        self._refresh()
+
+    def _seq_center(self) -> None:
+        self._scroll_to_cursor(center=True)
+
+    def _seq_next_thread(self) -> None:
+        line = self.state.next_thread()
+        if line:
+            wrapped = line < self.state.cursor_line
+            self._push_jump()
+            self.state.cursor_line = line
+            self._refresh()
+            if wrapped:
+                self._show_transient("Wrapped to first thread", "info", 1.2)
+        else:
+            self._show_transient("No threads")
+
+    def _seq_prev_thread(self) -> None:
+        line = self.state.prev_thread()
+        if line:
+            wrapped = line > self.state.cursor_line
+            self._push_jump()
+            self.state.cursor_line = line
+            self._refresh()
+            if wrapped:
+                self._show_transient("Wrapped to last thread", "info", 1.2)
+        else:
+            self._show_transient("No threads")
+
+    def _seq_next_unread(self) -> None:
+        line = self.state.next_unread_thread()
+        if line:
+            self._push_jump()
+            self.state.cursor_line = line
+            self._refresh()
+        else:
+            self._show_transient("No unread replies")
+
+    def _seq_prev_unread(self) -> None:
+        line = self.state.prev_unread_thread()
+        if line:
+            self._push_jump()
+            self.state.cursor_line = line
+            self._refresh()
+        else:
+            self._show_transient("No unread replies")
+
+    def _seq_heading_1_fwd(self) -> None:
+        self._jump_heading(1, forward=True)
+
+    def _seq_heading_1_back(self) -> None:
+        self._jump_heading(1, forward=False)
+
+    def _seq_heading_2_fwd(self) -> None:
+        self._jump_heading(2, forward=True)
+
+    def _seq_heading_2_back(self) -> None:
+        self._jump_heading(2, forward=False)
+
+    def _seq_heading_3_fwd(self) -> None:
+        self._jump_heading(3, forward=True)
+
+    def _seq_heading_3_back(self) -> None:
+        self._jump_heading(3, forward=False)
+
+    def _toggle_wrap(self) -> None:
+        self._wrap_enabled = not self._wrap_enabled
+        if self.pager_widget:
+            self.pager_widget.wrap_width = self.size.width if self._wrap_enabled else 0
+            self.pager_widget.invalidate_table_cache()
+        self._refresh()
+        self._show_transient(f"Line wrap {'on' if self._wrap_enabled else 'off'}", "info")
+
+    def _toggle_line_numbers(self) -> None:
+        if self.pager_widget:
+            self.pager_widget.show_line_numbers = not self.pager_widget.show_line_numbers
+            self.pager_widget.invalidate_table_cache()
+        self._refresh()
+        show = self.pager_widget.show_line_numbers if self.pager_widget else True
+        self._show_transient(f"Line numbers {'on' if show else 'off'}", "info")
 
     def _jump_heading(self, level: int, forward: bool) -> None:
         line = self.state.next_heading(level) if forward else self.state.prev_heading(level)
@@ -1534,8 +1651,8 @@ class RevspecApp(App):
                     type=event_type, thread_id=thread.id,
                     author="reviewer", ts=int(time.time() * 1000),
                 ))
-                # No auto-advance — popup stays open on the same thread
-            self._refresh()  # Popup stays open — refresh pager underneath
+                screen.update_status(thread.status)
+            self._refresh()
 
         screen = CommentScreen(
             self.state.cursor_line, thread,
@@ -1640,9 +1757,25 @@ class RevspecApp(App):
                 return
         self._refresh()  # TS silently refreshes on no match
 
+    def _is_watcher_running(self) -> bool:
+        """Check if a revspec watch process is monitoring this review."""
+        base = Path(self.spec_file)
+        lock_path = base.parent / (base.stem + ".review.lock")
+        if not lock_path.exists():
+            return False
+        try:
+            pid = int(lock_path.read_text().strip())
+            os.kill(pid, 0)  # signal 0 = check if process exists
+            return True
+        except (ValueError, OSError):
+            return False
+
     def _submit(self) -> None:
         if not self.state.threads:
             self._show_transient("No threads to submit.")
+            return
+        if not self._is_watcher_running():
+            self._show_transient("No watcher running. Start 'revspec watch' first.", "warn", 3.0)
             return
 
         def do_submit() -> None:
@@ -1745,13 +1878,18 @@ class RevspecApp(App):
                 self._show_transient(f"{open_c + pending} unresolved thread(s). Use :q! to force quit", "warn", 2.0)
             else:
                 self._exit_tui("session-end")
+        elif cmd in ("submit",):
+            self._submit()
+        elif cmd in ("approve",):
+            self._approve()
+        elif cmd in ("help",):
+            self.push_screen(HelpScreen())
+        elif cmd in ("resolve",):
+            self._resolve_current()
+        elif cmd in ("reload",):
+            self._reload_spec()
         elif cmd == "wrap":
-            self._wrap_enabled = not self._wrap_enabled
-            if self.pager_widget:
-                self.pager_widget.wrap_width = self.size.width if self._wrap_enabled else 0
-                self.pager_widget.invalidate_table_cache()
-            self._refresh()
-            self._show_transient(f"Line wrap {'on' if self._wrap_enabled else 'off'}", "info")
+            self._toggle_wrap()
         else:
             try:
                 line_num = int(cmd)
@@ -1768,6 +1906,14 @@ class RevspecApp(App):
         append_event(self.jsonl_path, LiveEvent(
             type=event_type, author="reviewer", ts=int(time.time() * 1000),
         ))
+        # Clean up offset file if no watcher is running to handle it
+        if not self._is_watcher_running():
+            base = Path(self.spec_file)
+            offset_path = base.parent / (base.stem + ".review.offset")
+            try:
+                offset_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         self.exit()
 
     def action_help(self) -> None:

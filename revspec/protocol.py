@@ -85,7 +85,7 @@ def read_events(jsonl_path: str, offset: int = 0) -> tuple[list[LiveEvent], int]
         f.seek(0, 2)
         file_size = f.tell()
         if file_size <= offset:
-            return [], offset
+            return [], file_size
         f.seek(offset)
         # Mid-line alignment safety: if offset lands mid-line, skip to next newline
         if offset > 0:
@@ -141,8 +141,9 @@ def replay_events_to_threads(events: list[LiveEvent]) -> list[Thread]:
                 status="open",
                 messages=[Message(author="reviewer", text=ev.text, ts=ev.ts)],
             )
+            if ev.thread_id not in threads:
+                order.append(ev.thread_id)
             threads[ev.thread_id] = t
-            order.append(ev.thread_id)
 
         elif ev.type == "reply":
             if not ev.thread_id or not ev.text:
@@ -168,5 +169,7 @@ def replay_events_to_threads(events: list[LiveEvent]) -> list[Thread]:
         elif ev.type == "delete":
             if ev.thread_id:
                 threads.pop(ev.thread_id, None)
+                if ev.thread_id in order:
+                    order.remove(ev.thread_id)
 
     return [threads[tid] for tid in order if tid in threads and threads[tid].messages]
