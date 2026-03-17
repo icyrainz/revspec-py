@@ -139,6 +139,21 @@ def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_hea
     text.append(" \u2502", dim)
 
 
+def _word_wrap_count(text: str, width: int) -> int:
+    """Count extra visual lines from word-wrapping. Port of pager.ts wordWrap."""
+    if width <= 0 or len(text) <= width:
+        return 0
+    count = 0
+    remaining = text
+    while len(remaining) > width:
+        break_at = remaining.rfind(" ", 0, width)
+        if break_at <= 0:
+            break_at = width
+        remaining = remaining[break_at:].lstrip(" ")
+        count += 1
+    return count
+
+
 def count_extra_visual_lines(
     spec_lines: list[str],
     cursor_index: int,
@@ -170,8 +185,6 @@ def count_extra_visual_lines(
             continue
         # Word wrap extra lines
         if not in_code and content_width > 0 and i < cursor_index:
-            line_len = len(spec_lines[i])
-            if line_len > content_width:
-                extra += line_len // content_width
+            extra += _word_wrap_count(spec_lines[i], content_width)
         i += 1
     return extra

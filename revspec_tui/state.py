@@ -65,17 +65,17 @@ class ReviewState:
 
     def next_unread_thread(self) -> int | None:
         unread = [t for t in self.threads if t.id in self._unread_thread_ids]
-        after = [t for t in unread if t.line > self.cursor_line]
+        after = next((t for t in unread if t.line > self.cursor_line), None)
         if after:
-            return min(t.line for t in after)
-        return min((t.line for t in unread), default=None)
+            return after.line
+        return unread[0].line if unread else None
 
     def prev_unread_thread(self) -> int | None:
         unread = [t for t in self.threads if t.id in self._unread_thread_ids]
-        before = [t for t in unread if t.line < self.cursor_line]
+        before = next((t for t in reversed(unread) if t.line < self.cursor_line), None)
         if before:
-            return max(t.line for t in before)
-        return max((t.line for t in unread), default=None)
+            return before.line
+        return unread[-1].line if unread else None
 
     def delete_thread(self, thread_id: str) -> None:
         self.threads = [t for t in self.threads if t.id != thread_id]
@@ -158,6 +158,18 @@ class ReviewState:
         self.threads = []
         self.cursor_line = 1
         self._unread_thread_ids.clear()
+
+    def delete_last_draft_message(self, thread_id: str) -> None:
+        """Remove the last reviewer message from a thread. If thread is empty after, delete it."""
+        t = self._find_thread(thread_id)
+        if not t:
+            return
+        for i in range(len(t.messages) - 1, -1, -1):
+            if t.messages[i].author == "reviewer":
+                t.messages.pop(i)
+                break
+        if not t.messages:
+            self.threads = [th for th in self.threads if th.id != thread_id]
 
     def _find_thread(self, thread_id: str) -> Thread | None:
         for t in self.threads:

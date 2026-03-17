@@ -20,8 +20,8 @@ THEME = {
 }
 
 STATUS_ICONS = {
-    "open": "\u258c",      # ▌
+    "open": "\u2588",      # █
     "pending": "\u2588",   # █
-    "resolved": "=",
+    "resolved": "\u2588",  # █
     "outdated": "-",
 }

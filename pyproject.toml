@@ -1,6 +1,6 @@
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.backends"
+build-backend = "hatchling.build"
 
 [project]
 name = "revspec"
@@ -24,6 +24,9 @@ dependencies = [
 
 [project.scripts]
 revspec = "revspec_tui.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["revspec_tui"]
 
 [project.urls]
 Homepage = "https://github.com/icyrainz/revspec-py"

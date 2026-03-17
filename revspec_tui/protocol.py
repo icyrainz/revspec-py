@@ -47,6 +47,8 @@ def is_valid_event(obj: dict) -> bool:
             return False
         if not isinstance(obj.get("line"), (int, float)):
             return False
+    if t == "round" and not isinstance(obj.get("round"), (int, float)):
+        return False
     return True
 
 
@@ -85,6 +87,15 @@ def read_events(jsonl_path: str, offset: int = 0) -> tuple[list[LiveEvent], int]
         if file_size <= offset:
             return [], offset
         f.seek(offset)
+        # Mid-line alignment safety: if offset lands mid-line, skip to next newline
+        if offset > 0:
+            prev_byte = b""
+            f.seek(offset - 1)
+            prev_byte = f.read(1)
+            if prev_byte != b"\n":
+                f.readline()  # skip partial line
+        else:
+            f.seek(offset)
         raw = f.read().decode("utf-8")
 
     events: list[LiveEvent] = []

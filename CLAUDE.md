@@ -45,48 +45,32 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 
 ## Current state (prototype)
 
-### Working (needs verification against TS behavior)
+### Implemented (full parity achieved)
 - Full-screen pager with line numbers, gutter thread indicators, cursor highlight
-- Basic markdown syntax highlighting (headings, code blocks, lists, blockquotes)
-- Vim-style navigation: j/k, Ctrl+D/U, gg/G
-- Multi-key sequences: dd (delete thread), ]t/[t (next/prev thread), ]1/[1 (heading jump)
-- Comment input modal (c key) — create new threads, reply to existing
-- Thread list modal (t key) — navigate between threads
-- Search modal (/ key) with n/N cycling, smartcase
+- Markdown syntax highlighting (headings, code blocks, lists, blockquotes, tables)
+- Vim-style navigation: j/k, Ctrl+D/U, gg/G, H/M/L, zz
+- Multi-key sequences: dd, ]t/[t, ]r/[r, ]1/[1, '', gg, zz
+- Jump list: Ctrl+O/Tab forward/backward, '' swap
+- Comment input modal (c key) with vim normal/insert modes, persistence, resolve toggle
+- Thread list modal (t key) with sort/filter
+- Search modal (/ key) with n/N cycling, smartcase, incremental preview
 - Command mode (:q, :q!, :wrap, :{line})
 - Confirm dialogs for destructive actions
 - Help screen (? key)
 - JSONL protocol: read, write, replay — fully compatible with TypeScript version
-- Resolve/unresolve threads (r key)
-- Approve (A) and Submit (S)
-- Status bars: top (file + thread counts) and bottom (position + hints)
-- Search highlighting in pager
-
-### Not yet implemented (required for parity)
-- **Live watcher** — file polling for AI replies (see `src/cli/watch.ts`). Watch handles three exit conditions: approve > submit > session-end (priority order). Crash recovery: watch detects pending unprocessed `submit` and re-outputs resolved thread summaries.
-- **Reply CLI subcommand** — `revspec reply <file.md> <threadId> "<text>"` (see `src/cli/reply.ts`)
-- **Watch CLI subcommand** — `revspec watch <file.md>` (see `src/cli/watch.ts`)
-- **Submit spinner** — modal spinner while waiting for AI to rewrite spec, polls spec mtime, cancellable (see `src/tui/spinner.ts`)
-- **Spec reload** — detect spec file changes after submit, reload content, clear threads, reset state (see submit handler in `src/tui/app.ts` lines 770-820)
-- **Spec mutation guard** — detect if spec file was modified externally, show warning in top bar (see `src/tui/app.ts` lines 119-125)
-- **Jump list** — Ctrl+O/I forward/backward jump history, '' swap, mirrors vim :jumps (see `src/tui/app.ts` lines 161-184)
-- **Thread popup persistence** — comment dialog stays open after submit for conversation flow; reply appends message to dialog, doesn't dismiss (see `src/tui/comment-input.ts`)
-- **Thread popup vim modes** — normal mode (j/k scroll, blur textarea) vs insert mode (i/a to focus textarea); Ctrl+D/U scroll in normal mode (see `src/tui/comment-input.ts`)
-- **Thread popup resolve toggle** — r key in thread popup toggles resolve, auto-advances to next thread on resolve (see `onResolve` in `src/tui/app.ts`)
-- **H/M/L keys** — screen-relative cursor positioning using visualRowToSpecLine (see `src/tui/app.ts` lines 187-193, 925-944)
-- **zz** — center cursor on screen (see `src/tui/app.ts` lines 663-670)
-- **'' (jump back)** — swap between current and last jump position (see `src/tui/app.ts` lines 909-922)
-- **]r/[r** — next/prev unread thread (see state.ts nextUnreadThread/prevUnreadThread)
-- **R** — resolve all pending threads (see `src/tui/app.ts` lines 731-744)
-- **Line wrapping** — :wrap toggle with proper visual-row-to-spec-line mapping (see countExtraVisualLines in `src/tui/pager.ts`)
-- **Transient messages** — timed status bar notifications with icon support (info/warn/success), auto-clear after timeout (see showTransient in `src/tui/app.ts`)
-- **Unread indicators** — bold yellow gutter █ for unread AI replies (see pager rendering)
-- **Thread preview in bottom bar** — when cursor is on a line with a thread, show first message preview + reply count + status (see `src/tui/app.ts` lines 131-141)
-- **Live watcher integration** — real-time AI reply handling, flash notification for AI replies when not viewing that thread (see `src/tui/app.ts` lines 63-81)
-- **Markdown-aware table rendering** — box-drawing characters for tables (see `src/tui/ui/markdown.ts` lines 234-292)
-- **Code-block-aware rendering** — track in_code_block state, different styling inside fenced blocks
-- **Incremental search** — search preview updates pager highlighting as you type (see onPreview in search overlay)
-- **Tests** — unit tests for state and protocol, integration tests for CLI subcommands
+- Resolve/unresolve threads (r key), resolve all pending (R)
+- Approve (A) and Submit (S) with spec reload polling
+- Status bars: top (file, thread counts, unread, mutation guard, position, breadcrumb) and bottom (thread preview, position, hints)
+- Transient messages with icon support (info/warn/success)
+- Unread indicators (bold yellow gutter block)
+- Spec mutation guard (external modification warning)
+- Live watcher integration (real-time AI reply handling)
+- Markdown-aware table rendering with box-drawing characters
+- Code-block-aware rendering
+- Line wrapping (:wrap toggle with visual-row-to-spec-line mapping)
+- Watch CLI subcommand (`revspec watch <file.md>`) with crash recovery
+- Reply CLI subcommand (`revspec reply <file.md> <threadId> "<text>"`)
+- Tests: unit tests for state, protocol, markdown; integration tests for watch, reply
 
 ## Complete keybinding reference (must match exactly)
 

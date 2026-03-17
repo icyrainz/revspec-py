@@ -22,25 +22,33 @@ def run_watch(spec_file: str) -> None:
     _acquire_lock(lock_path)
 
     offset, last_submit_ts = _read_offset(offset_path)
+    # Guard against truncated/recreated JSONL — reset if file is smaller than offset
+    if jsonl_path.exists():
+        if offset > jsonl_path.stat().st_size:
+            offset = 0
+            last_submit_ts = 0
+    else:
+        offset = 0
+        last_submit_ts = 0
     spec_lines = spec_path.read_text(encoding="utf-8").split("\n")
 
     no_block = os.environ.get("REVSPEC_WATCH_NO_BLOCK") == "1"
 
-    if no_block:
-        result = _process_new_events(
-            str(jsonl_path), str(offset_path), str(spec_path),
-            spec_lines, offset, last_submit_ts, check_recovery=True,
-        )
-        if result.approved:
-            print("Review approved.")
-            _cleanup(lock_path, offset_path)
-        elif result.output:
-            sys.stdout.write(result.output)
-        return
-
-    # Blocking mode: poll until events arrive
-    first_poll = True
     try:
+        if no_block:
+            result = _process_new_events(
+                str(jsonl_path), str(offset_path), str(spec_path),
+                spec_lines, offset, last_submit_ts, check_recovery=True,
+            )
+            if result.approved:
+                print("Review approved.")
+                _cleanup(lock_path, offset_path)
+            elif result.output:
+                sys.stdout.write(result.output)
+            return
+
+        # Blocking mode: poll until events arrive
+        first_poll = True
         while True:
             result = _process_new_events(
                 str(jsonl_path), str(offset_path), str(spec_path),
@@ -263,8 +271,14 @@ def _read_offset(offset_path):
     if not offset_path.exists():
         return 0, 0
     lines = offset_path.read_text().strip().split("\n")
-    offset = int(lines[0]) if lines else 0
-    submit_ts = int(lines[1]) if len(lines) > 1 else 0
+    try:
+        offset = int(lines[0]) if lines else 0
+    except ValueError:
+        offset = 0
+    try:
+        submit_ts = int(lines[1]) if len(lines) > 1 else 0
+    except ValueError:
+        submit_ts = 0
     return offset, submit_ts
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -40,7 +41,7 @@ class CommentScreen(ModalScreen[CommentResult]):
     CSS = """
     CommentScreen { align: center middle; }
     #comment-dialog {
-        width: 70;
+        width: 70%;
         height: 80%;
         border: solid #89b4fa;
         background: #313244;
@@ -115,10 +116,19 @@ class CommentScreen(ModalScreen[CommentResult]):
         is_reviewer = msg.author == "reviewer"
         prefix = "You" if is_reviewer else "AI"
         color = THEME["blue"] if is_reviewer else THEME["green"]
+        ts_str = ""
+        if msg.ts:
+            ts_str = datetime.fromtimestamp(msg.ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        header = f"{prefix}  {ts_str}" if ts_str else prefix
         text = Text()
-        text.append(f"{prefix}: ", Style(color=color, bold=True))
+        text.append(header, Style(color=color, bold=True))
+        text.append("\n")
         text.append(msg.text)
         return Static(text)
+
+    def update_title(self, thread_id: str, line: int) -> None:
+        """Update dialog title after new thread creation."""
+        self.query_one("#comment-title", Static).update(f"Thread #{thread_id} (line {line})")
 
     def add_message(self, msg: Message) -> None:
         """Push a message into the conversation (for live watcher)."""
@@ -142,6 +152,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         dialog.styles.border = ("solid", THEME["blue"])
 
     def on_key(self, event: Key) -> None:
+        event.stop()  # prevent bubbling to main app
         if self._mode == "insert":
             self._handle_insert_key(event)
         else:
@@ -163,7 +174,8 @@ class CommentScreen(ModalScreen[CommentResult]):
             if self._on_submit:
                 self._on_submit(text)
             # Append to conversation display
-            self.add_message(Message(author="reviewer", text=text))
+            import time as _time
+            self.add_message(Message(author="reviewer", text=text, ts=int(_time.time() * 1000)))
             # Clear textarea and switch to normal
             textarea.clear()
             self._enter_normal()
