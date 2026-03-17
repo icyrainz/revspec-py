@@ -24,7 +24,7 @@ def main() -> None:
         if len(args) < 4:
             print('Usage: revspec reply <file.md> <threadId> "<text>"', file=sys.stderr)
             sys.exit(1)
-        from revspec_tui.reply import run_reply
+        from revspec.reply import run_reply
         run_reply(args[1], args[2], args[3])
         return
 
@@ -32,7 +32,7 @@ def main() -> None:
         if len(args) < 2:
             print("Usage: revspec watch <file.md>", file=sys.stderr)
             sys.exit(1)
-        from revspec_tui.watch import run_watch
+        from revspec.watch import run_watch
         run_watch(args[1])
         return
 
@@ -47,7 +47,7 @@ def main() -> None:
         print(f"Error: Spec file not found: {spec_path}", file=sys.stderr)
         sys.exit(1)
 
-    from revspec_tui.app import RevspecApp
+    from revspec.app import RevspecApp
 
     app = RevspecApp(str(spec_path))
     app.run()

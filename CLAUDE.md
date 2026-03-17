@@ -27,7 +27,7 @@ The original revspec depends on Bun (via OpenTUI's bun:ffi bindings to Zig). Som
 ## Architecture
 
 ```
-revspec_tui/
+revspec/
   cli.py              # Entry point, arg parsing, subcommand routing
   app.py              # Main Textual App — ScrollView pager, overlays, key handling
   state.py            # ReviewState — cursor, threads, navigation
@@ -59,11 +59,12 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 
 ### Implemented (full parity achieved)
 - ScrollView pager with Line API virtual scrolling, cursor prefix `>`, gutter indicators (`█` for all states, color-coded)
-- Markdown syntax highlighting (h1-h3 color-coded: blue/blue/mauve, code blocks green, blockquotes italic)
+- Markdown syntax highlighting (h1-h3 color-coded: blue/blue/mauve, code blocks green, blockquotes with │ prefix, list bullets with •, horizontal rules)
+- Inline markdown rendering (bold, italic, code, links, strikethrough) via parse_inline_markdown()
 - Vim-style navigation: j/k, Ctrl+D/U, gg/G, H/M/L, zz
 - Multi-key sequences: dd, ]t/[t, ]r/[r, ]1/[1, '', gg, zz
 - Jump list: Ctrl+O/Ctrl+I/Tab forward/backward, '' swap
-- Comment input modal (c key) with vim normal/insert modes, timestamps, title update on new thread
+- Comment input modal (c key) with vim normal/insert modes, timestamps, title update on new thread, border title, colored message pipes, resolve stays open
 - Thread list modal (t key) with sort/filter, wrap-around navigation, empty state
 - Search modal (/ key) with n/N cycling, smartcase, incremental preview (3+ chars), red "No match"
 - Command mode (:q, :q!, :wrap, :{line} with clamping)
@@ -73,7 +74,9 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - JSONL protocol: read, write, replay — fully compatible with TypeScript version
 - Resolve/unresolve threads (r key), resolve all pending (R)
 - Approve (A) and Submit (S) with spinner + spec reload polling
-- Status bars: top (file, thread counts, unread, mutation guard, position, breadcrumb) and bottom (thread preview, position, hints)
+- Status bars: top (file, thread counts, unread, mutation guard, position, breadcrumb) and bottom (thread preview, position, context-sensitive hints with Rich Text styling)
+- Transparent pager background (THEME["base"] = None, inherits terminal bg)
+- Pending key hint in bottom bar (e.g. `g...`, `]...`) with 300ms timeout
 - Transient messages with icon support (info/warn/success), bottom bar guard against overwrites
 - Unread indicators (yellow gutter block)
 - Spec mutation guard (external modification warning in top bar)
@@ -85,12 +88,10 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - Reply CLI subcommand with thread validation, shell escape cleanup
 - All overlay screens use event.stop() to prevent key leaking to main app
 - Welcome hint on first launch (8s)
-- Tests: 144 total (state, protocol, markdown, watch, reply)
+- Tests: 157 total (state, protocol, markdown, watch, reply)
 
 ### Known issues / remaining work
-- **Inline markdown rendering** — bold/italic/code/links render as raw text with markers visible; TS parses inline segments with per-segment styling
-- **Pending key hint** — TS shows partial sequence (e.g. `g`) in bottom bar while waiting for second key
-- **Pager background** — `THEME["base"]` is hardcoded `#1e1e2e` vs TS `undefined` (transparent/inherit terminal bg)
+- **Inline markdown in table cells** — table cell contents are rendered as plain text; `parse_inline_markdown()` is not applied inside `render_table_row()`
 
 ## Complete keybinding reference (must match exactly)
 
@@ -179,23 +180,23 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 
 | Feature | TypeScript source | Python module |
 |---------|-------------------|---------------|
-| Main TUI + keybindings | `src/tui/app.ts` | `revspec_tui/app.py` |
-| Review state | `src/state/review-state.ts` | `revspec_tui/state.py` |
-| JSONL protocol | `src/protocol/live-events.ts` | `revspec_tui/protocol.py` |
-| Protocol types | `src/protocol/types.ts` | `revspec_tui/protocol.py` |
-| Theme/colors | `src/tui/ui/theme.ts` | `revspec_tui/theme.py` |
-| Pager rendering | `src/tui/pager.ts` | `revspec_tui/app.py` (SpecPager ScrollView) |
-| Comment input | `src/tui/comment-input.ts` | `revspec_tui/comment_screen.py` |
-| Search overlay | `src/tui/search.ts` | `revspec_tui/app.py` (SearchScreen class) |
-| Thread list | `src/tui/thread-list.ts` | `revspec_tui/app.py` (ThreadListScreen class) |
-| Confirm dialog | `src/tui/confirm.ts` | `revspec_tui/app.py` (ConfirmScreen class) |
-| Help screen | `src/tui/help.ts` | `revspec_tui/app.py` (HelpScreen class) |
-| Spinner | `src/tui/spinner.ts` | `revspec_tui/app.py` (SpinnerScreen class) |
-| Status bars | `src/tui/status-bar.ts` | `revspec_tui/app.py` (top/bottom bar methods) |
-| Keybind registry | `src/tui/ui/keybinds.ts` | `revspec_tui/app.py` (inline) |
-| Markdown rendering | `src/tui/ui/markdown.ts` | `revspec_tui/markdown.py` + `app.py` (_line_style) |
-| Hint bar | `src/tui/ui/hint-bar.ts` | `revspec_tui/app.py` (inline) |
-| Live watcher | `src/tui/live-watcher.ts` | `revspec_tui/app.py` (_check_live_events) |
-| CLI watch | `src/cli/watch.ts` | `revspec_tui/watch.py` |
-| CLI reply | `src/cli/reply.ts` | `revspec_tui/reply.py` |
-| CLI entry | `bin/revspec.ts` | `revspec_tui/cli.py` |
+| Main TUI + keybindings | `src/tui/app.ts` | `revspec/app.py` |
+| Review state | `src/state/review-state.ts` | `revspec/state.py` |
+| JSONL protocol | `src/protocol/live-events.ts` | `revspec/protocol.py` |
+| Protocol types | `src/protocol/types.ts` | `revspec/protocol.py` |
+| Theme/colors | `src/tui/ui/theme.ts` | `revspec/theme.py` |
+| Pager rendering | `src/tui/pager.ts` | `revspec/app.py` (SpecPager ScrollView) |
+| Comment input | `src/tui/comment-input.ts` | `revspec/comment_screen.py` |
+| Search overlay | `src/tui/search.ts` | `revspec/app.py` (SearchScreen class) |
+| Thread list | `src/tui/thread-list.ts` | `revspec/app.py` (ThreadListScreen class) |
+| Confirm dialog | `src/tui/confirm.ts` | `revspec/app.py` (ConfirmScreen class) |
+| Help screen | `src/tui/help.ts` | `revspec/app.py` (HelpScreen class) |
+| Spinner | `src/tui/spinner.ts` | `revspec/app.py` (SpinnerScreen class) |
+| Status bars | `src/tui/status-bar.ts` | `revspec/app.py` (top/bottom bar methods) |
+| Keybind registry | `src/tui/ui/keybinds.ts` | `revspec/app.py` (inline) |
+| Markdown rendering | `src/tui/ui/markdown.ts` | `revspec/markdown.py` + `app.py` (_line_style) |
+| Hint bar | `src/tui/ui/hint-bar.ts` | `revspec/app.py` (inline) |
+| Live watcher | `src/tui/live-watcher.ts` | `revspec/app.py` (_check_live_events) |
+| CLI watch | `src/cli/watch.ts` | `revspec/watch.py` |
+| CLI reply | `src/cli/reply.ts` | `revspec/reply.py` |
+| CLI entry | `bin/revspec.ts` | `revspec/cli.py` |

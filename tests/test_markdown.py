@@ -1,8 +1,8 @@
 """Tests for markdown table parsing and rendering helpers."""
-from revspec_tui.markdown import (
+from revspec.markdown import (
     display_width, parse_table_cells, scan_table_blocks,
     collect_table, count_extra_visual_lines, SEPARATOR_RE,
-    _word_wrap_count,
+    _word_wrap_count, parse_inline_markdown,
 )
 
 
@@ -181,3 +181,68 @@ class TestCountExtraVisualLines:
         ]
         extra = count_extra_visual_lines(lines, 2, wrap_width=80)
         assert extra > 0
+
+
+class TestParseInlineMarkdown:
+    def test_bold(self):
+        result = parse_inline_markdown("**hello**")
+        assert result == [("hello", {"bold": True})]
+
+    def test_italic(self):
+        result = parse_inline_markdown("*hello*")
+        assert result == [("hello", {"italic": True})]
+
+    def test_code(self):
+        result = parse_inline_markdown("`code`")
+        assert result == [("code", {"color": "#cba6f7"})]
+
+    def test_mixed(self):
+        result = parse_inline_markdown("plain **bold** text")
+        assert result == [
+            ("plain ", {}),
+            ("bold", {"bold": True}),
+            (" text", {}),
+        ]
+
+    def test_link(self):
+        result = parse_inline_markdown("[click](http://example.com)")
+        assert result == [("click", {"color": "#89b4fa", "underline": True})]
+
+    def test_bold_italic(self):
+        result = parse_inline_markdown("***both***")
+        assert result == [("both", {"bold": True, "italic": True})]
+
+    def test_strikethrough(self):
+        result = parse_inline_markdown("~~struck~~")
+        assert result == [("struck", {"color": "#6c7086", "strike": True})]
+
+    def test_underscore_bold(self):
+        result = parse_inline_markdown("__bold__")
+        assert result == [("bold", {"bold": True})]
+
+    def test_underscore_italic(self):
+        result = parse_inline_markdown("_italic_")
+        assert result == [("italic", {"italic": True})]
+
+    def test_plain_text_passthrough(self):
+        result = parse_inline_markdown("no markdown here")
+        assert result == [("no markdown here", {})]
+
+    def test_empty_string(self):
+        result = parse_inline_markdown("")
+        assert result == [("", {})]
+
+    def test_multiple_segments(self):
+        result = parse_inline_markdown("a **b** *c* `d`")
+        assert len(result) == 6
+        assert result[0] == ("a ", {})
+        assert result[1] == ("b", {"bold": True})
+        assert result[2] == (" ", {})
+        assert result[3] == ("c", {"italic": True})
+        assert result[4] == (" ", {})
+        assert result[5] == ("d", {"color": "#cba6f7"})
+
+    def test_underscore_mid_word_not_matched(self):
+        """Underscores inside words should NOT trigger italic/bold."""
+        result = parse_inline_markdown("foo_bar_baz")
+        assert result == [("foo_bar_baz", {})]

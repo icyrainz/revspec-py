@@ -1,7 +1,7 @@
 """Catppuccin Mocha theme — matches the TypeScript TUI."""
 
 THEME = {
-    "base": "#1e1e2e",
+    "base": None,  # None = transparent (inherit terminal background)
     "panel": "#313244",
     "text": "#cdd6f4",
     "text_muted": "#a6adc8",
@@ -23,5 +23,5 @@ STATUS_ICONS = {
     "open": "\u2588",      # █
     "pending": "\u2588",   # █
     "resolved": "\u2588",  # █
-    "outdated": "-",
+    "outdated": "\u2588",  # █
 }

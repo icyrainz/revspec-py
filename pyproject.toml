@@ -23,10 +23,10 @@ dependencies = [
 ]
 
 [project.scripts]
-revspec = "revspec_tui.cli:main"
+revspec = "revspec.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["revspec_tui"]
+packages = ["revspec"]
 
 [project.urls]
 Homepage = "https://github.com/icyrainz/revspec-py"

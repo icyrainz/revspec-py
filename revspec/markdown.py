@@ -10,17 +10,31 @@ from .theme import THEME
 
 SEPARATOR_RE = re.compile(r"^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)*\|?\s*$")
 
-# Inline markdown stripping for display width calculation
+# Inline markdown regex — used for both stripping (display_width) and styled parsing.
+# Groups: 1=bold-italic, 2=bold, 3=italic, 4=bold(underscore), 5=italic(underscore),
+#         6=strikethrough, 7=link text, 8=code
 _INLINE_MD_RE = re.compile(
     r"\*\*\*(.+?)\*\*\*"
     r"|\*\*(.+?)\*\*"
     r"|\*(.+?)\*"
-    r"|__(.+?)__"
-    r"|_(.+?)_"
+    r"|(?<!\w)__(.+?)__(?!\w)"
+    r"|(?<!\w)_(.+?)_(?!\w)"
     r"|~~(.+?)~~"
     r"|\[([^\]]+)\]\([^)]+\)"
     r"|`([^`]+)`"
 )
+
+# Style kwargs for each capture group (1-indexed)
+_INLINE_STYLES: dict[int, dict] = {
+    1: {"bold": True, "italic": True},           # ***bold italic***
+    2: {"bold": True},                            # **bold**
+    3: {"italic": True},                          # *italic*
+    4: {"bold": True},                            # __bold__
+    5: {"italic": True},                          # _italic_
+    6: {"color": "#6c7086", "strike": True},      # ~~strikethrough~~
+    7: {"color": "#89b4fa", "underline": True},   # [link text](url)
+    8: {"color": "#cba6f7"},                       # `code`
+}
 
 
 def display_width(s: str) -> int:
@@ -31,6 +45,35 @@ def display_width(s: str) -> int:
                 return g
         return m.group(0)
     return len(_INLINE_MD_RE.sub(_repl, s))
+
+
+def parse_inline_markdown(text: str) -> list[tuple[str, dict]]:
+    """Parse inline markdown and return list of (text, style_kwargs) segments.
+
+    Each segment is a tuple of (visible_text, style_kwargs_dict) where
+    style_kwargs is a dict suitable for ``rich.style.Style(**kwargs)``.
+    Plain text segments have an empty dict.
+    """
+    segments: list[tuple[str, dict]] = []
+    last_end = 0
+    for m in _INLINE_MD_RE.finditer(text):
+        # Append any plain text before this match
+        if m.start() > last_end:
+            segments.append((text[last_end:m.start()], {}))
+        # Find which group matched
+        for group_idx in range(1, 9):
+            content = m.group(group_idx)
+            if content is not None:
+                segments.append((content, dict(_INLINE_STYLES[group_idx])))
+                break
+        last_end = m.end()
+    # Trailing plain text
+    if last_end < len(text):
+        segments.append((text[last_end:], {}))
+    # If nothing matched, return the whole string as plain
+    if not segments:
+        segments.append((text, {}))
+    return segments
 
 
 @dataclass
@@ -125,7 +168,7 @@ def render_table_separator(text: Text, col_widths: list[int]) -> None:
 
 def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_header: bool) -> None:
     """Append a table data/header row with padded cells to Rich Text."""
-    style = Style(color=THEME["text"], bold=is_header)
+    base_style = Style(color=THEME["text"], bold=is_header)
     dim = Style(color=THEME["text_dim"])
     for c, width in enumerate(col_widths):
         cell_text = cells[c] if c < len(cells) else ""
@@ -133,7 +176,13 @@ def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_hea
         padding = max(0, width - dw)
         border = "\u2502 " if c == 0 else " \u2502 "
         text.append(border, dim)
-        text.append(cell_text, style)
+        # Parse inline markdown in cell content (bold, italic, code, links, etc.)
+        for seg_text, seg_kwargs in parse_inline_markdown(cell_text):
+            if seg_kwargs:
+                seg_style = base_style + Style(**seg_kwargs)
+                text.append(seg_text, seg_style)
+            else:
+                text.append(seg_text, base_style)
         if padding > 0:
             text.append(" " * padding)
     text.append(" \u2502", dim)

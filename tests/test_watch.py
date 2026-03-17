@@ -1,7 +1,7 @@
 """Integration tests for revspec watch CLI subcommand."""
 import json
 import pytest
-from revspec_tui.watch import run_watch
+from revspec.watch import run_watch
 
 
 def _write_spec(tmp_path, content="# Spec\n\nSome content\n"):

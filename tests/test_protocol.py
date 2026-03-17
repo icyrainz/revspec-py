@@ -1,6 +1,6 @@
 """Tests for JSONL protocol — event validation, parsing, serialization, and thread replay."""
 import json
-from revspec_tui.protocol import (
+from revspec.protocol import (
     LiveEvent,
     is_valid_event, parse_event, append_event,
     read_events, replay_events_to_threads,

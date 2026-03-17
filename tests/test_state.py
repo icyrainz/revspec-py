@@ -1,5 +1,5 @@
 """Tests for ReviewState."""
-from revspec_tui.state import ReviewState
+from revspec.state import ReviewState
 
 
 def _make_state(n_lines=20):

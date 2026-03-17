@@ -1,8 +1,8 @@
 """Integration tests for revspec reply CLI subcommand."""
 import json
 import pytest
-from revspec_tui.reply import run_reply
-from revspec_tui.protocol import read_events
+from revspec.reply import run_reply
+from revspec.protocol import read_events
 
 
 def _write_spec(tmp_path, content="# Spec\n\nSome content\n"):
