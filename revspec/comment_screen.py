@@ -255,7 +255,6 @@ class CommentScreen(ModalScreen[CommentResult]):
         elif key == "r":
             if self._on_resolve:
                 self._on_resolve()
-            self.dismiss(CommentResult("resolve"))
         elif key in ("j", "down"):
             self.query_one("#comment-history", VerticalScroll).scroll_down()
         elif key in ("k", "up"):

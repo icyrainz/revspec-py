@@ -237,6 +237,24 @@ class TestNextUnreadThread:
         assert state.next_unread_thread() is None
 
 
+class TestNextUnreadThreadInsertionOrder:
+    """Regression: unread navigation must use line order, not insertion order."""
+    def test_out_of_order_insertion_next(self):
+        state = _make_state()
+        _add_thread(state, 10, unread=True)
+        _add_thread(state, 3, unread=True)
+        state.cursor_line = 1
+        assert state.next_unread_thread() == 3  # nearest by line, not first inserted
+
+    def test_out_of_order_insertion_prev(self):
+        state = _make_state()
+        _add_thread(state, 3, unread=True)
+        _add_thread(state, 10, unread=True)
+        _add_thread(state, 7, unread=True)
+        state.cursor_line = 12
+        assert state.prev_unread_thread() == 10  # nearest before cursor
+
+
 class TestPrevUnreadThread:
     def test_finds_prev_before_cursor(self):
         state = _make_state()
@@ -303,6 +321,13 @@ class TestHeadingNavigation:
         state = _make_state()  # "line 0", "line 1", etc.
         assert state.next_heading(1) is None
         assert state.prev_heading(1) is None
+
+    def test_single_heading_wraps_to_self(self):
+        """Regression: cursor on the only heading should wrap back to it."""
+        state = ReviewState(["# Only H1", "text", "more text"])
+        state.cursor_line = 1
+        assert state.next_heading(1) == 1
+        assert state.prev_heading(1) == 1
 
 
 # --- can_approve ---

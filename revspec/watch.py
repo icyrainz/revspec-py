@@ -106,12 +106,13 @@ def _process_new_events(
             after = all_events[last_submit_idx + 1:]
             has_new = any(e.type in ("comment", "reply", "approve", "session-end") for e in after)
             if not has_new:
-                round_start = _find_current_round_start(all_events)
-                round_threads = replay_events_to_threads(all_events[round_start:])
+                all_events_2, eof_offset = read_events(jsonl_path, 0)
+                round_start = _find_current_round_start(all_events_2)
+                round_threads = replay_events_to_threads(all_events_2[round_start:])
                 resolved = [t for t in round_threads if t.status == "resolved"]
                 output = _format_submit_output(resolved, spec_path)
-                _write_offset(offset_path, offset, last_submit_event.ts)
-                return _ProcessResult(output=output, new_offset=offset)
+                _write_offset(offset_path, eof_offset, last_submit_event.ts)
+                return _ProcessResult(output=output, new_offset=eof_offset)
         return _ProcessResult(new_offset=offset)
 
     if not events:
@@ -194,10 +195,10 @@ def _format_watch_output(events, threads_by_id, spec_lines, spec_path):
             lines.append("")
 
     if new_ids or reply_ids:
-        lines.append(f"When done replying, run: revspec watch {Path(spec_path).name}")
+        lines.append(f"When done replying, run: revspec watch {spec_path}")
         lines.append("")
 
-    return "\n".join(lines) + ("\n" if lines else "")
+    return "\n".join(lines)
 
 
 def _format_submit_output(resolved_threads, spec_path):
@@ -211,7 +212,7 @@ def _format_submit_output(resolved_threads, spec_path):
             if owner_msgs:
                 lines.append(f"    \u2192 AI: \"{'; '.join(m.text for m in owner_msgs)}\"")
         lines.append("")
-    lines.append(f"Rewrite the spec incorporating the above, then run: revspec watch {Path(spec_path).name}")
+    lines.append(f"Rewrite the spec incorporating the above, then run: revspec watch {spec_path}")
     lines.append("")
     return "\n".join(lines)
 

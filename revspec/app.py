@@ -494,7 +494,7 @@ class SearchScreen(ModalScreen[tuple[str, int] | None]):
             inp.styles.color = THEME["red"]
 
     def on_key(self, event: Key) -> None:
-        if event.key == "escape":
+        if event.key in ("escape", "ctrl+c"):
             event.prevent_default()
             event.stop()
             self.dismiss(None)
@@ -555,7 +555,7 @@ class ConfirmScreen(ModalScreen[bool]):
         event.stop()
         if event.key in ("y", "enter"):
             self.dismiss(True)
-        elif event.key in ("q", "escape"):
+        elif event.key in ("q", "escape", "ctrl+c"):
             self.dismiss(False)
 
 
@@ -641,7 +641,7 @@ class ThreadListScreen(ModalScreen[int | None]):
     async def on_key(self, event: Key) -> None:
         event.prevent_default()
         event.stop()
-        if event.key in ("escape", "q"):
+        if event.key in ("escape", "q", "ctrl+c"):
             self.dismiss(None)
         elif event.key == "enter":
             if self.threads:
@@ -778,7 +778,7 @@ class HelpScreen(ModalScreen[None]):
         event.prevent_default()
         event.stop()
         key = event.key
-        if key in ("escape", "q", "question_mark"):
+        if key in ("escape", "q", "question_mark", "ctrl+c"):
             self.dismiss(None)
         elif key in ("j", "down"):
             self.query_one("#help-scroll", VerticalScroll).scroll_down()
@@ -1007,8 +1007,7 @@ class RevspecApp(App):
                     self._live_watcher_offset = os.path.getsize(self.jsonl_path)
                 else:
                     self._live_watcher_offset = 0
-                self._refresh()
-                self._show_transient("Spec rewritten \u2014 review cleared", "success", 2.5)
+                # _refresh() and transient deferred to on_spinner_done("success")
         except OSError:
             pass
 
@@ -1021,6 +1020,7 @@ class RevspecApp(App):
                 owner_events = [e for e in events if e.author == "owner"]
                 last_reply_line = None
                 last_reply_thread_id = None
+                changed = False
                 for e in owner_events:
                     if e.type == "reply" and e.thread_id and e.text:
                         self.state.add_owner_reply(e.thread_id, e.text, e.ts)
@@ -1034,7 +1034,23 @@ class RevspecApp(App):
                         active = self.screen
                         if isinstance(active, CS) and active.existing_thread and active.existing_thread.id == e.thread_id:
                             active.add_message(Message(author="owner", text=e.text, ts=e.ts))
-                if owner_events:
+                        changed = True
+                    elif e.type == "resolve" and e.thread_id:
+                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                        if t and t.status != "resolved":
+                            t.status = "resolved"
+                            changed = True
+                    elif e.type == "unresolve" and e.thread_id:
+                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                        if t and t.status == "resolved":
+                            t.status = "open"
+                            changed = True
+                    elif e.type == "delete" and e.thread_id:
+                        before = len(self.state.threads)
+                        self.state.delete_thread(e.thread_id)
+                        if len(self.state.threads) < before:
+                            changed = True
+                if changed:
                     self._refresh()
                     # Only flash if CommentScreen is not open for this thread
                     if last_reply_line:
@@ -1224,14 +1240,18 @@ class RevspecApp(App):
 
     def _jump_swap(self) -> None:
         """'' — swap between current position and last jump entry."""
-        if len(self._jump_list) > 1:
-            cur = self.state.cursor_line
-            prev_idx = max(0, self._jump_index - 1)
-            target = self._jump_list[prev_idx]
-            self._jump_list[self._jump_index] = cur
-            self._jump_index = prev_idx
-            self.state.cursor_line = min(target, self.state.line_count)
-            self._refresh()
+        if len(self._jump_list) < 2:
+            return
+        cur = self.state.cursor_line
+        if self._jump_index == 0:
+            target_idx = 1
+        else:
+            target_idx = self._jump_index - 1
+        target = self._jump_list[target_idx]
+        self._jump_list[self._jump_index] = cur
+        self._jump_index = target_idx
+        self.state.cursor_line = min(target, self.state.line_count)
+        self._refresh()
 
     # --- Multi-key sequence handling ---
 
@@ -1406,7 +1426,7 @@ class RevspecApp(App):
             case "right_square_brackett":  # ]t
                 line = self.state.next_thread()
                 if line:
-                    wrapped = line <= self.state.cursor_line
+                    wrapped = line < self.state.cursor_line
                     self._push_jump()
                     self.state.cursor_line = line
                     self._refresh()
@@ -1417,7 +1437,7 @@ class RevspecApp(App):
             case "left_square_brackett":  # [t
                 line = self.state.prev_thread()
                 if line:
-                    wrapped = line >= self.state.cursor_line
+                    wrapped = line > self.state.cursor_line
                     self._push_jump()
                     self.state.cursor_line = line
                     self._refresh()
@@ -1509,7 +1529,7 @@ class RevspecApp(App):
                     next_line = self.state.next_thread()
                     if next_line is not None:
                         self.state.cursor_line = next_line
-            # No _refresh() here — on_result callback handles it after dismiss
+            self._refresh()  # Popup stays open — refresh pager underneath
 
         screen = CommentScreen(
             self.state.cursor_line, thread,
@@ -1641,7 +1661,9 @@ class RevspecApp(App):
                         self._spec_poll_timer.stop()
                         self._spec_poll_timer = None
                     self._show_transient("AI did not update the spec. Press S to resubmit.", "warn", 3.0)
-                # "success" — spec reload already handled, nothing to do
+                elif result == "success":
+                    self._refresh()
+                    self._show_transient("Spec rewritten \u2014 review cleared", "success", 2.5)
 
             self.push_screen(spinner, on_spinner_done)
 
@@ -1780,7 +1802,7 @@ class CommandScreen(ModalScreen[str | None]):
         self.dismiss(event.value.strip())
 
     def on_key(self, event: Key) -> None:
-        if event.key == "escape":
+        if event.key in ("escape", "ctrl+c"):
             event.prevent_default()
             event.stop()
             self.dismiss(None)

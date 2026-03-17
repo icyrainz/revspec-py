@@ -64,14 +64,20 @@ class ReviewState:
                 t.status = "resolved"
 
     def next_unread_thread(self) -> int | None:
-        unread = [t for t in self.threads if t.id in self._unread_thread_ids]
+        unread = sorted(
+            [t for t in self.threads if t.id in self._unread_thread_ids],
+            key=lambda t: t.line,
+        )
         after = next((t for t in unread if t.line > self.cursor_line), None)
         if after:
             return after.line
         return unread[0].line if unread else None
 
     def prev_unread_thread(self) -> int | None:
-        unread = [t for t in self.threads if t.id in self._unread_thread_ids]
+        unread = sorted(
+            [t for t in self.threads if t.id in self._unread_thread_ids],
+            key=lambda t: t.line,
+        )
         before = next((t for t in reversed(unread) if t.line < self.cursor_line), None)
         if before:
             return before.line
@@ -110,7 +116,7 @@ class ReviewState:
             line = self.spec_lines[i]
             if line.startswith(prefix) and not line.startswith(guard):
                 return i + 1
-        for i in range(0, self.cursor_line - 1):
+        for i in range(0, self.cursor_line):
             line = self.spec_lines[i]
             if line.startswith(prefix) and not line.startswith(guard):
                 return i + 1
@@ -123,7 +129,7 @@ class ReviewState:
             line = self.spec_lines[i]
             if line.startswith(prefix) and not line.startswith(guard):
                 return i + 1
-        for i in range(len(self.spec_lines) - 1, self.cursor_line - 1, -1):
+        for i in range(len(self.spec_lines) - 1, self.cursor_line - 2, -1):
             line = self.spec_lines[i]
             if line.startswith(prefix) and not line.startswith(guard):
                 return i + 1

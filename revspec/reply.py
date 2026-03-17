@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from .protocol import LiveEvent, append_event, read_events
+from .protocol import LiveEvent, append_event, read_events, replay_events_to_threads
 
 
 def run_reply(spec_file: str, thread_id: str, text: str) -> None:
@@ -23,9 +23,10 @@ def run_reply(spec_file: str, thread_id: str, text: str) -> None:
         print(f"Error: JSONL file not found: {jsonl_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Validate thread ID exists
+    # Validate thread ID exists and is not deleted
     events, _ = read_events(jsonl_path)
-    if not any(e.thread_id == thread_id for e in events):
+    threads = replay_events_to_threads(events)
+    if not any(t.id == thread_id for t in threads):
         print(f"Error: Thread ID not found: {thread_id}", file=sys.stderr)
         sys.exit(1)
 

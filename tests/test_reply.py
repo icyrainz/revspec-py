@@ -81,3 +81,17 @@ class TestReply:
         with pytest.raises(SystemExit) as exc_info:
             run_reply(str(spec), "t1", "hello")
         assert exc_info.value.code == 1
+
+    def test_deleted_thread_exits(self, tmp_path):
+        """Regression: reply to a deleted thread should be rejected."""
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Fix this"},
+            {"type": "delete", "author": "reviewer", "ts": 2000,
+             "threadId": "t1"},
+        ])
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_reply(str(spec), "t1", "hello")
+        assert exc_info.value.code == 1
