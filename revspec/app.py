@@ -1524,11 +1524,7 @@ class RevspecApp(App):
                     type=event_type, thread_id=thread.id,
                     author="reviewer", ts=int(time.time() * 1000),
                 ))
-                # Auto-advance to next thread only when resolving
-                if not was_resolved:
-                    next_line = self.state.next_thread()
-                    if next_line is not None:
-                        self.state.cursor_line = next_line
+                # No auto-advance — popup stays open on the same thread
             self._refresh()  # Popup stays open — refresh pager underneath
 
         screen = CommentScreen(
