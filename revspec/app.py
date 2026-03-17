@@ -574,8 +574,8 @@ class ThreadListScreen(ModalScreen[int | None]):
         align: center middle;
     }
     #thread-list-dialog {
-        width: 70;
-        height: 20;
+        width: 56%;
+        height: 50%;
         border: solid #89b4fa;
         background: #313244;
         padding: 1 2;
@@ -590,7 +590,8 @@ class ThreadListScreen(ModalScreen[int | None]):
     }
     .thread-item-selected {
         height: 1;
-        background: #45475a;
+        background: #313244;
+        color: #f5c2e7;
     }
     #thread-hints {
         color: #6c7086;
@@ -624,19 +625,30 @@ class ThreadListScreen(ModalScreen[int | None]):
         raw = t.messages[0].text.replace("\n", " ") if t.messages else ""
         return (raw[:49] + "\u2026") if len(raw) > 50 else raw
 
+    STATUS_COLORS = {"open": THEME["text"], "pending": THEME["yellow"], "resolved": THEME["green"]}
+
+    def _hints_text(self) -> str:
+        return f"[j/k] Navigate  [Enter] Jump  [Ctrl+f] Filter: {self._filter_mode}  [q/Esc] Close"
+
+    def _render_item(self, t: Thread) -> Text:
+        icon = STATUS_ICONS.get(t.status, " ")
+        color = self.STATUS_COLORS.get(t.status, THEME["text_dim"])
+        preview = self._preview_text(t)
+        text = Text()
+        text.append(f" {icon}", Style(color=color))
+        text.append(f" #{t.id} line {t.line}: {preview}")
+        return text
+
     def compose(self) -> ComposeResult:
         with Vertical(id="thread-list-dialog"):
             yield Static(self._title_text(), id="thread-list-title")
             if self.threads:
                 for i, t in enumerate(self.threads):
-                    icon = STATUS_ICONS.get(t.status, " ")
-                    preview = self._preview_text(t)
-                    label = f" {icon} #{t.id} line {t.line}: {preview}"
                     cls = "thread-item-selected" if i == 0 else "thread-item"
-                    yield Static(label, classes=cls)
+                    yield Static(self._render_item(t), classes=cls)
             else:
                 yield Static(" No threads. Press [Esc] to close.", classes="thread-item")
-            yield Static("[j/k] Navigate  [Enter] Jump  [Ctrl+f] Filter  [q/Esc] Close", id="thread-hints")
+            yield Static(self._hints_text(), id="thread-hints")
 
     async def on_key(self, event: Key) -> None:
         event.prevent_default()
@@ -666,13 +678,11 @@ class ThreadListScreen(ModalScreen[int | None]):
         hints = self.query_one("#thread-hints", Static)
         dialog = self.query_one("#thread-list-dialog", Vertical)
         for i, t in enumerate(self.threads):
-            icon = STATUS_ICONS.get(t.status, " ")
-            preview = self._preview_text(t)
-            label = f" {icon} #{t.id} line {t.line}: {preview}"
             cls = "thread-item-selected" if i == 0 else "thread-item"
-            widget = Static(label, classes=cls)
+            widget = Static(self._render_item(t), classes=cls)
             dialog.mount(widget, before=hints)
         self.query_one("#thread-list-title", Static).update(self._title_text())
+        self.query_one("#thread-hints", Static).update(self._hints_text())
 
     def _move(self, delta: int) -> None:
         if not self.threads:
