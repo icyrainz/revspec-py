@@ -22,18 +22,30 @@ The original revspec depends on Bun (via OpenTUI's bun:ffi bindings to Zig). Som
 - Package: `revspec` on PyPI
 - Install: `pipx install revspec` or `pip install revspec`
 - Run: `revspec <file.md>`
-- Dev: `pip install -e .` for editable install
+- Dev: `uv venv && uv pip install hatchling editables && uv pip install -e . --no-build-isolation`
 
 ## Architecture
 
 ```
 revspec_tui/
-  cli.py          # Entry point, arg parsing
-  app.py          # Main Textual App — pager, overlays, key handling
-  state.py        # ReviewState — cursor, threads, navigation
-  protocol.py     # JSONL live event protocol (read/write/replay)
-  theme.py        # Catppuccin Mocha color scheme
+  cli.py              # Entry point, arg parsing, subcommand routing
+  app.py              # Main Textual App — ScrollView pager, overlays, key handling
+  state.py            # ReviewState — cursor, threads, navigation
+  protocol.py         # JSONL live event protocol (read/write/replay)
+  theme.py            # Catppuccin Mocha color scheme
+  comment_screen.py   # Thread popup with vim normal/insert modes
+  markdown.py         # Table parsing, rendering, word-wrap helpers
+  watch.py            # CLI watch subcommand (AI event monitor)
+  reply.py            # CLI reply subcommand (AI reply writer)
 ```
+
+### Pager architecture
+
+`SpecPager` extends Textual's `ScrollView` using the Line API:
+- `rebuild_visual_model()` builds a list of visual rows: `("spec", idx)`, `("spec_wrap", idx, seg)`, `("table_border", idx, pos)`
+- `render_line(y)` renders a single visual row on demand — Textual's compositor calls this for each visible screen line
+- `virtual_size` tells ScrollView the total content height
+- Scrolling is native to ScrollView — no manual viewport math needed
 
 ## JSONL Protocol
 
@@ -43,34 +55,42 @@ Event types: `comment`, `reply`, `resolve`, `unresolve`, `approve`, `delete`, `s
 
 Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-specific fields (`threadId`, `line`, `text`).
 
-## Current state (prototype)
+## Current state
 
 ### Implemented (full parity achieved)
-- Full-screen pager with line numbers, gutter thread indicators, cursor highlight
-- Markdown syntax highlighting (headings, code blocks, lists, blockquotes, tables)
+- ScrollView pager with Line API virtual scrolling, cursor prefix `>`, gutter indicators (`█` for all states, color-coded)
+- Markdown syntax highlighting (h1-h3 color-coded: blue/blue/mauve, code blocks green, blockquotes italic)
 - Vim-style navigation: j/k, Ctrl+D/U, gg/G, H/M/L, zz
 - Multi-key sequences: dd, ]t/[t, ]r/[r, ]1/[1, '', gg, zz
-- Jump list: Ctrl+O/Tab forward/backward, '' swap
-- Comment input modal (c key) with vim normal/insert modes, persistence, resolve toggle
-- Thread list modal (t key) with sort/filter
-- Search modal (/ key) with n/N cycling, smartcase, incremental preview
-- Command mode (:q, :q!, :wrap, :{line})
-- Confirm dialogs for destructive actions
-- Help screen (? key)
+- Jump list: Ctrl+O/Ctrl+I/Tab forward/backward, '' swap
+- Comment input modal (c key) with vim normal/insert modes, timestamps, title update on new thread
+- Thread list modal (t key) with sort/filter, wrap-around navigation, empty state
+- Search modal (/ key) with n/N cycling, smartcase, incremental preview (3+ chars), red "No match"
+- Command mode (:q, :q!, :wrap, :{line} with clamping)
+- Confirm dialogs (mauve border, y/Enter confirm, q/Esc cancel)
+- Help screen (? key) with j/k/gg/G/Ctrl+D/U scrolling
+- Spinner modal on submit (80ms animation, Ctrl+C cancel, 120s wall-clock timeout)
 - JSONL protocol: read, write, replay — fully compatible with TypeScript version
 - Resolve/unresolve threads (r key), resolve all pending (R)
-- Approve (A) and Submit (S) with spec reload polling
+- Approve (A) and Submit (S) with spinner + spec reload polling
 - Status bars: top (file, thread counts, unread, mutation guard, position, breadcrumb) and bottom (thread preview, position, hints)
-- Transient messages with icon support (info/warn/success)
-- Unread indicators (bold yellow gutter block)
-- Spec mutation guard (external modification warning)
-- Live watcher integration (real-time AI reply handling)
+- Transient messages with icon support (info/warn/success), bottom bar guard against overwrites
+- Unread indicators (yellow gutter block)
+- Spec mutation guard (external modification warning in top bar)
+- Live watcher integration (AI reply push into open CommentScreen, flash suppression, offset advance, restart on reload)
 - Markdown-aware table rendering with box-drawing characters
-- Code-block-aware rendering
-- Line wrapping (:wrap toggle with visual-row-to-spec-line mapping)
-- Watch CLI subcommand (`revspec watch <file.md>`) with crash recovery
-- Reply CLI subcommand (`revspec reply <file.md> <threadId> "<text>"`)
-- Tests: unit tests for state, protocol, markdown; integration tests for watch, reply
+- Code-block-aware rendering with precomputed state map
+- Line wrapping (:wrap toggle with continuation rows in visual model)
+- Watch CLI subcommand with crash recovery, JSONL truncation guard, lock management
+- Reply CLI subcommand with thread validation, shell escape cleanup
+- All overlay screens use event.stop() to prevent key leaking to main app
+- Welcome hint on first launch (8s)
+- Tests: 144 total (state, protocol, markdown, watch, reply)
+
+### Known issues / remaining work
+- **Inline markdown rendering** — bold/italic/code/links render as raw text with markers visible; TS parses inline segments with per-segment styling
+- **Pending key hint** — TS shows partial sequence (e.g. `g`) in bottom bar while waiting for second key
+- **Pager background** — `THEME["base"]` is hardcoded `#1e1e2e` vs TS `undefined` (transparent/inherit terminal bg)
 
 ## Complete keybinding reference (must match exactly)
 
@@ -119,7 +139,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 | :q! | Force quit |
 | :qa, :wq, etc. | All quit variants supported |
 | :wrap | Toggle line wrapping |
-| :{N} | Jump to line number |
+| :{N} | Jump to line number (clamps to range, rejects <=0) |
 
 ### Overlay keys
 | Context | Key | Action |
@@ -127,15 +147,16 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 | Any overlay | Ctrl+C | Force dismiss |
 | Comment popup | Tab | Submit comment |
 | Comment popup | Esc | Cancel/dismiss |
-| Comment popup | i/a | Enter insert mode |
+| Comment popup | i/c | Enter insert mode |
 | Comment popup | Escape (in insert) | Return to normal mode |
-| Thread list | j/k | Navigate |
+| Thread list | j/k | Navigate (wraps around) |
 | Thread list | Enter | Go to thread |
+| Thread list | Ctrl+F | Cycle filter (all/active/resolved) |
 | Thread list | Esc | Dismiss |
 | Search | Enter | Accept match |
 | Search | Esc | Cancel |
 | Confirm | y/Enter | Confirm |
-| Confirm | n/Esc | Cancel |
+| Confirm | q/Esc | Cancel |
 
 ## Conventions (must match the TypeScript version exactly)
 
@@ -144,7 +165,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - Thread popup uses vim-style normal/insert modes (blur textarea in normal)
 - Hint bars use `[key] action` bracket format — all labels defined in keymap
 - Consistent dismiss/confirm keys: `y/Enter` to confirm, `q/Esc` to dismiss (all popups)
-- No inline comment previews in pager — gutter indicators only: ▌ active thread, █ unread AI reply, = resolved
+- No inline comment previews in pager — gutter indicators only: █ for all states (white=open, yellow=unread, green=resolved)
 - Thread IDs use nanoid (8-char alphanumeric) — no sequential t1/t2
 - No review JSON — JSONL is the single source of truth
 - `submit` events in JSONL act as round delimiters
@@ -163,18 +184,18 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 | JSONL protocol | `src/protocol/live-events.ts` | `revspec_tui/protocol.py` |
 | Protocol types | `src/protocol/types.ts` | `revspec_tui/protocol.py` |
 | Theme/colors | `src/tui/ui/theme.ts` | `revspec_tui/theme.py` |
-| Pager rendering | `src/tui/pager.ts` | `revspec_tui/app.py` (SpecPager class) |
-| Comment input | `src/tui/comment-input.ts` | `revspec_tui/app.py` (CommentScreen class) |
+| Pager rendering | `src/tui/pager.ts` | `revspec_tui/app.py` (SpecPager ScrollView) |
+| Comment input | `src/tui/comment-input.ts` | `revspec_tui/comment_screen.py` |
 | Search overlay | `src/tui/search.ts` | `revspec_tui/app.py` (SearchScreen class) |
 | Thread list | `src/tui/thread-list.ts` | `revspec_tui/app.py` (ThreadListScreen class) |
 | Confirm dialog | `src/tui/confirm.ts` | `revspec_tui/app.py` (ConfirmScreen class) |
 | Help screen | `src/tui/help.ts` | `revspec_tui/app.py` (HelpScreen class) |
-| Spinner | `src/tui/spinner.ts` | not yet implemented |
+| Spinner | `src/tui/spinner.ts` | `revspec_tui/app.py` (SpinnerScreen class) |
 | Status bars | `src/tui/status-bar.ts` | `revspec_tui/app.py` (top/bottom bar methods) |
 | Keybind registry | `src/tui/ui/keybinds.ts` | `revspec_tui/app.py` (inline) |
-| Markdown rendering | `src/tui/ui/markdown.ts` | `revspec_tui/app.py` (SpecPager._line_style) |
+| Markdown rendering | `src/tui/ui/markdown.ts` | `revspec_tui/markdown.py` + `app.py` (_line_style) |
 | Hint bar | `src/tui/ui/hint-bar.ts` | `revspec_tui/app.py` (inline) |
-| Live watcher | `src/tui/live-watcher.ts` | not yet implemented |
-| CLI watch | `src/cli/watch.ts` | not yet implemented |
-| CLI reply | `src/cli/reply.ts` | not yet implemented |
+| Live watcher | `src/tui/live-watcher.ts` | `revspec_tui/app.py` (_check_live_events) |
+| CLI watch | `src/cli/watch.ts` | `revspec_tui/watch.py` |
+| CLI reply | `src/cli/reply.ts` | `revspec_tui/reply.py` |
 | CLI entry | `bin/revspec.ts` | `revspec_tui/cli.py` |
