@@ -26,6 +26,10 @@ from .protocol import (
 )
 from .theme import THEME, STATUS_ICONS
 from .comment_screen import CommentScreen, CommentResult
+from .markdown import (
+    scan_table_blocks, render_table_border, render_table_separator,
+    render_table_row, parse_table_cells, TableBlock,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -41,12 +45,21 @@ class SpecPager(Static):
     def __init__(self, state: ReviewState, **kwargs):
         super().__init__(**kwargs)
         self.state = state
-        self._in_code_block = False
+        self._table_blocks: dict[int, TableBlock] | None = None
+        self.wrap_width: int = 0  # 0 = no wrapping
+
+    def invalidate_table_cache(self) -> None:
+        self._table_blocks = None
 
     def render(self) -> Text:
         lines = self.state.spec_lines
         text = Text()
         gutter_width = len(str(len(lines))) + 1
+        gutter_blank = " " * (1 + 1 + gutter_width + 1)  # prefix + indicator + num + space
+
+        # Cache table blocks
+        if self._table_blocks is None:
+            self._table_blocks = scan_table_blocks(lines)
 
         in_code_block = False
         for i, line in enumerate(lines):
@@ -54,20 +67,28 @@ class SpecPager(Static):
             is_cursor = line_num == self.cursor_line
             thread = self.state.thread_at_line(line_num)
 
+            # Table context
+            table_block = self._table_blocks.get(i)
+            is_table = table_block is not None and not self.search_query
+            rel_idx = i - table_block.start_index if is_table else -1
+
+            # Top border before first table row
+            if is_table and rel_idx == 0:
+                text.append(gutter_blank, Style(color=THEME["text_dim"]))
+                render_table_border(text, table_block.col_widths, "top")
+                text.append("\n")
+
             # Gutter indicator
             if thread:
-                icon = STATUS_ICONS.get(thread.status, " ")
-                if thread.status == "open":
-                    gutter_style = Style(color=THEME["blue"])
-                elif thread.status == "pending":
-                    if self.state.is_unread(thread.id):
-                        gutter_style = Style(color=THEME["yellow"], bold=True)
-                    else:
-                        gutter_style = Style(color=THEME["yellow"])
+                if self.state.is_unread(thread.id):
+                    icon = "\u2588"  # █ full block — unread
+                    gutter_style = Style(color=THEME["yellow"], bold=True)
                 elif thread.status == "resolved":
+                    icon = "="
                     gutter_style = Style(color=THEME["green"])
                 else:
-                    gutter_style = Style(color=THEME["text_dim"])
+                    icon = "\u258c"  # ▌ half block
+                    gutter_style = Style(color=THEME["blue"])
                 text.append(icon, gutter_style)
             else:
                 text.append(" ")
@@ -80,21 +101,36 @@ class SpecPager(Static):
             if line.strip().startswith("```"):
                 in_code_block = not in_code_block
 
-            # Line content with basic markdown highlighting
-            content_style = self._line_style(line, in_code_block, is_cursor)
-            content = line if line else " "
+            # Render content
+            if is_table:
+                # Table row rendering with box-drawing
+                if rel_idx == table_block.separator_index:
+                    render_table_separator(text, table_block.col_widths)
+                else:
+                    is_header = table_block.separator_index >= 0 and rel_idx < table_block.separator_index
+                    cells = parse_table_cells(line)
+                    render_table_row(text, cells, table_block.col_widths, is_header)
 
-            # Search highlighting — smartcase
-            if self.search_query:
-                cs = self.search_query != self.search_query.lower()
-                q = self.search_query if cs else self.search_query.lower()
-                hay = content if cs else content.lower()
-                if q in hay:
-                    self._append_highlighted(text, content, self.search_query, content_style, is_cursor)
+                # Bottom border after last row
+                if rel_idx == len(table_block.lines) - 1:
+                    text.append("\n")
+                    text.append(gutter_blank, Style(color=THEME["text_dim"]))
+                    render_table_border(text, table_block.col_widths, "bottom")
+            else:
+                content_style = self._line_style(line, in_code_block, is_cursor)
+                content = line if line else " "
+
+                # Search highlighting — smartcase
+                if self.search_query:
+                    cs = self.search_query != self.search_query.lower()
+                    q = self.search_query if cs else self.search_query.lower()
+                    hay = content if cs else content.lower()
+                    if q in hay:
+                        self._append_highlighted(text, content, self.search_query, content_style, is_cursor)
+                    else:
+                        text.append(content, content_style)
                 else:
                     text.append(content, content_style)
-            else:
-                text.append(content, content_style)
 
             if i < len(lines) - 1:
                 text.append("\n")
@@ -104,8 +140,12 @@ class SpecPager(Static):
     def _line_style(self, line: str, in_code_block: bool, is_cursor: bool) -> Style:
         bg = THEME["panel"] if is_cursor else None
 
-        if in_code_block or line.strip().startswith("```"):
-            return Style(color=THEME["text_muted"], bgcolor=bg)
+        # Fence line (``` markers) — dim
+        if line.strip().startswith("```"):
+            return Style(color=THEME["text_dim"], bgcolor=bg)
+        # Inside code block — green, no markdown parsing
+        if in_code_block:
+            return Style(color=THEME["green"], bgcolor=bg)
 
         stripped = line.lstrip()
         if stripped.startswith("# "):
@@ -166,10 +206,11 @@ class SearchScreen(ModalScreen[tuple[str, int] | None]):
     }
     """
 
-    def __init__(self, spec_lines: list[str], cursor_line: int, **kwargs):
+    def __init__(self, spec_lines: list[str], cursor_line: int, on_preview=None, **kwargs):
         super().__init__(**kwargs)
         self.spec_lines = spec_lines
         self.start_line = cursor_line
+        self._on_preview = on_preview
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="search-bar"):
@@ -178,6 +219,12 @@ class SearchScreen(ModalScreen[tuple[str, int] | None]):
 
     def on_mount(self) -> None:
         self.query_one("#search-input", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Incremental search — preview highlights after 3+ characters."""
+        if self._on_preview:
+            raw = event.value.strip()
+            self._on_preview(raw if len(raw) >= 3 else None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
@@ -465,6 +512,9 @@ class RevspecApp(App):
 
         # Transient message timer handle
         self._message_timer = None
+
+        # Line wrapping
+        self._wrap_enabled = False
 
     def compose(self) -> ComposeResult:
         yield Static(self._top_bar_text(), id="top-bar")
@@ -883,7 +933,13 @@ class RevspecApp(App):
         self.push_screen(screen, on_result)
 
     def _open_search(self) -> None:
-        screen = SearchScreen(self.state.spec_lines, self.state.cursor_line)
+        def on_preview(query: str | None) -> None:
+            self.search_query = query
+            self._refresh()
+
+        screen = SearchScreen(
+            self.state.spec_lines, self.state.cursor_line, on_preview=on_preview,
+        )
 
         def on_result(result: tuple[str, int] | None) -> None:
             if result:
@@ -891,6 +947,8 @@ class RevspecApp(App):
                 self.search_query = query
                 self._push_jump()
                 self.state.cursor_line = line
+            else:
+                self.search_query = None
             self._refresh()
 
         self.push_screen(screen, on_result)
@@ -975,7 +1033,11 @@ class RevspecApp(App):
             else:
                 self._exit_tui("session-end")
         elif cmd == "wrap":
-            self._show_transient("Line wrap toggled (not yet implemented in prototype)")
+            self._wrap_enabled = not self._wrap_enabled
+            if self.pager_widget:
+                self.pager_widget.wrap_width = self.size.width if self._wrap_enabled else 0
+            self._refresh()
+            self._show_transient(f"Line wrap {'on' if self._wrap_enabled else 'off'}", "info")
         else:
             try:
                 line_num = int(cmd)
