@@ -16,7 +16,7 @@ def main() -> None:
 
     if "--version" in args or "-v" in args:
         from importlib.metadata import version
-        print(f"revspec {version('revspec')}")
+        print(f"revspec {version('revspec')} (python)")
         sys.exit(0)
 
     # Subcommand routing
