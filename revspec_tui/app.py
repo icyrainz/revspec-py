@@ -25,6 +25,7 @@ from .protocol import (
     replay_events_to_threads,
 )
 from .theme import THEME, STATUS_ICONS
+from .comment_screen import CommentScreen, CommentResult
 
 
 # ---------------------------------------------------------------------------
@@ -142,84 +143,6 @@ class SpecPager(Static):
             pos = idx + len(query)
 
 
-# ---------------------------------------------------------------------------
-# Comment input modal
-# ---------------------------------------------------------------------------
-
-class CommentScreen(ModalScreen[str | None]):
-    """Modal for creating/replying to comments."""
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-    ]
-
-    CSS = """
-    CommentScreen {
-        align: center middle;
-    }
-    #comment-dialog {
-        width: 70;
-        height: 16;
-        border: solid $accent;
-        background: #313244;
-        padding: 1 2;
-    }
-    #comment-title {
-        text-style: bold;
-        color: #89b4fa;
-        margin-bottom: 1;
-    }
-    #comment-input {
-        height: 8;
-    }
-    #comment-hints {
-        color: #6c7086;
-        margin-top: 1;
-    }
-    """
-
-    def __init__(
-        self,
-        line: int,
-        existing_thread: Thread | None = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.line = line
-        self.existing_thread = existing_thread
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="comment-dialog"):
-            if self.existing_thread:
-                yield Static(
-                    f"Thread #{self.existing_thread.id} (line {self.line})",
-                    id="comment-title",
-                )
-                # Show existing messages
-                for msg in self.existing_thread.messages:
-                    prefix = "You" if msg.author == "reviewer" else "AI"
-                    style = "bold" if msg.author == "reviewer" else "italic"
-                    yield Static(f"[{style}]{prefix}:[/{style}] {msg.text[:80]}")
-            else:
-                yield Static(f"New comment on line {self.line}", id="comment-title")
-            yield TextArea(id="comment-input")
-            yield Static("[Tab] Submit  [Esc] Cancel  [r] Resolve", id="comment-hints")
-
-    def on_mount(self) -> None:
-        self.query_one("#comment-input", TextArea).focus()
-
-    def on_key(self, event: Key) -> None:
-        if event.key == "tab":
-            event.prevent_default()
-            text = self.query_one("#comment-input", TextArea).text.strip()
-            if text:
-                self.dismiss(text)
-        elif event.key == "escape":
-            event.prevent_default()
-            self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 # ---------------------------------------------------------------------------
@@ -860,13 +783,9 @@ class RevspecApp(App):
 
     def _open_comment(self) -> None:
         thread = self.state.thread_at_line(self.state.cursor_line)
-        screen = CommentScreen(self.state.cursor_line, thread)
 
-        def on_result(text: str | None) -> None:
-            if text is None:
-                if thread:
-                    self.state.mark_read(thread.id)
-                return
+        def on_submit(text: str) -> None:
+            nonlocal thread
             if thread:
                 self.state.reply_to_thread(thread.id, text)
                 self.state.mark_read(thread.id)
@@ -881,6 +800,34 @@ class RevspecApp(App):
                     line=self.state.cursor_line, author="reviewer",
                     text=text, ts=int(time.time() * 1000),
                 ))
+                thread = new_thread  # Subsequent submits are replies
+            self._refresh()
+
+        def on_resolve() -> None:
+            if thread:
+                was_resolved = thread.status == "resolved"
+                self.state.resolve_thread(thread.id)
+                self.state.mark_read(thread.id)
+                event_type = "unresolve" if was_resolved else "resolve"
+                append_event(self.jsonl_path, LiveEvent(
+                    type=event_type, thread_id=thread.id,
+                    author="reviewer", ts=int(time.time() * 1000),
+                ))
+                # Auto-advance to next thread only when resolving
+                if not was_resolved:
+                    next_line = self.state.next_thread()
+                    if next_line is not None:
+                        self.state.cursor_line = next_line
+            self._refresh()
+
+        screen = CommentScreen(
+            self.state.cursor_line, thread,
+            on_submit=on_submit, on_resolve=on_resolve,
+        )
+
+        def on_result(result: CommentResult) -> None:
+            if thread:
+                self.state.mark_read(thread.id)
             self._refresh()
 
         self.push_screen(screen, on_result)
