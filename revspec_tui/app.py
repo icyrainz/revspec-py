@@ -569,6 +569,13 @@ class RevspecApp(App):
         self._spec_mtime = Path(spec_file).stat().st_mtime
         self._spec_mtime_changed = False
 
+        # Submit flow
+        self._spec_poll_timer = None
+
+        # Live watcher
+        self._live_watcher_timer = None
+        self._live_watcher_offset = 0
+
     def compose(self) -> ComposeResult:
         yield Static(self._top_bar_text(), id="top-bar")
         self.pager_widget = SpecPager(self.state, id="pager-scroll")
@@ -577,6 +584,53 @@ class RevspecApp(App):
 
     def on_mount(self) -> None:
         self._refresh()
+        # Start live watcher polling
+        if os.path.exists(self.jsonl_path):
+            self._live_watcher_offset = os.path.getsize(self.jsonl_path)
+        self._live_watcher_timer = self.set_interval(0.5, self._check_live_events)
+
+    def _check_spec_reload(self) -> None:
+        """Poll spec file mtime for reload after submit."""
+        try:
+            current_mtime = Path(self.spec_file).stat().st_mtime
+            if current_mtime != self._spec_mtime:
+                if self._spec_poll_timer:
+                    self._spec_poll_timer.stop()
+                    self._spec_poll_timer = None
+                new_content = Path(self.spec_file).read_text(encoding="utf-8")
+                self.state.reset(new_content.split("\n"))
+                self._spec_mtime = current_mtime
+                self._spec_mtime_changed = False
+                self.search_query = None
+                self._jump_list = [1]
+                self._jump_index = 0
+                if self.pager_widget:
+                    self.pager_widget.invalidate_table_cache()
+                self._refresh()
+                self._show_transient("Spec rewritten \u2014 review cleared", "success", 2.5)
+        except OSError:
+            pass
+
+    def _check_live_events(self) -> None:
+        """Poll JSONL for owner events (AI replies)."""
+        try:
+            events, new_offset = read_events(self.jsonl_path, self._live_watcher_offset)
+            if events:
+                self._live_watcher_offset = new_offset
+                owner_events = [e for e in events if e.author == "owner"]
+                last_reply_line = None
+                for e in owner_events:
+                    if e.type == "reply" and e.thread_id and e.text:
+                        self.state.add_owner_reply(e.thread_id, e.text, e.ts)
+                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                        if t:
+                            last_reply_line = t.line
+                if owner_events:
+                    self._refresh()
+                    if last_reply_line:
+                        self._show_transient(f"AI replied on line {last_reply_line}", "info")
+        except OSError:
+            pass
 
     def _top_bar_text(self) -> Text:
         text = Text()
@@ -1084,10 +1138,40 @@ class RevspecApp(App):
         if not self.state.threads:
             self._show_transient("No threads to submit")
             return
-        append_event(self.jsonl_path, LiveEvent(
-            type="submit", author="reviewer", ts=int(time.time() * 1000),
-        ))
-        self._show_transient(f"Submitted {len(self.state.threads)} thread(s)")
+
+        def do_submit() -> None:
+            append_event(self.jsonl_path, LiveEvent(
+                type="submit", author="reviewer", ts=int(time.time() * 1000),
+            ))
+            count = len(self.state.threads)
+            self._show_transient(f"Submitted {count} thread{'s' if count != 1 else ''} — waiting for rewrite...", "info")
+            # Start polling spec mtime for reload
+            self._spec_poll_timer = self.set_interval(0.5, self._check_spec_reload)
+
+        # Unresolved gate
+        if not self.state.can_approve():
+            open_c, pending = self.state.active_thread_count()
+            total = open_c + pending
+            screen = ConfirmScreen(
+                "Unresolved Threads",
+                f"{total} thread(s) still unresolved. Resolve all and continue?",
+            )
+
+            def on_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    for t in self.state.threads:
+                        if t.status not in ("resolved", "outdated"):
+                            append_event(self.jsonl_path, LiveEvent(
+                                type="resolve", thread_id=t.id,
+                                author="reviewer", ts=int(time.time() * 1000),
+                            ))
+                    self.state.resolve_all()
+                    self._refresh()
+                    do_submit()
+
+            self.push_screen(screen, on_confirm)
+        else:
+            do_submit()
 
     def _approve(self) -> None:
         if not self.state.can_approve():

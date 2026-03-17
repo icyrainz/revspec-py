@@ -10,6 +10,8 @@ def main() -> None:
 
     if not args or "--help" in args or "-h" in args:
         print("Usage: revspec <file.md>")
+        print("       revspec watch <file.md>")
+        print('       revspec reply <file.md> <threadId> "<text>"')
         sys.exit(0)
 
     if "--version" in args or "-v" in args:
@@ -17,6 +19,24 @@ def main() -> None:
         print(f"revspec {version('revspec')}")
         sys.exit(0)
 
+    # Subcommand routing
+    if args[0] == "reply":
+        if len(args) < 4:
+            print('Usage: revspec reply <file.md> <threadId> "<text>"', file=sys.stderr)
+            sys.exit(1)
+        from revspec_tui.reply import run_reply
+        run_reply(args[1], args[2], args[3])
+        return
+
+    if args[0] == "watch":
+        if len(args) < 2:
+            print("Usage: revspec watch <file.md>", file=sys.stderr)
+            sys.exit(1)
+        from revspec_tui.watch import run_watch
+        run_watch(args[1])
+        return
+
+    # Default: launch TUI
     spec_file = next((a for a in args if not a.startswith("--")), None)
     if not spec_file:
         print("Error: No spec file provided", file=sys.stderr)
