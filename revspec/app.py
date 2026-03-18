@@ -3,910 +3,30 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 from pathlib import Path
 
-from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.events import Key
-from textual.screen import ModalScreen
-from textual.scroll_view import ScrollView
-from textual.widgets import Static, TextArea, Input, Footer, Header
-from textual.reactive import reactive
-from textual.message import Message as TMessage
-from textual.strip import Strip
-from textual.geometry import Size
+from textual.widgets import Static
 from rich.text import Text
 from rich.style import Style
-from rich.console import Console
 
 from .state import ReviewState
-from .protocol import (
-    LiveEvent, Thread, append_event, read_events,
-    replay_events_to_threads,
+from .protocol import LiveEvent, Message, append_event, read_events, replay_events_to_threads
+from .theme import THEME
+from .commands import parse_command
+from .hints import build_hints, build_top_bar, build_bottom_bar
+from .key_dispatch import SequenceRouter
+from .navigation import JumpList
+from .pager import SpecPager
+from .overlays import (
+    SearchScreen, ConfirmScreen, ThreadListScreen,
+    HelpScreen, SpinnerScreen, CommandScreen,
 )
-from .theme import THEME, STATUS_ICONS
+from .watcher_service import LiveWatcherService, is_watcher_running
 from .comment_screen import CommentScreen, CommentResult
-from .markdown import (
-    scan_table_blocks, render_table_border, render_table_separator,
-    render_table_row, parse_table_cells, TableBlock,
-    parse_inline_markdown,
-)
-
-
-# ---------------------------------------------------------------------------
-# Pager widget — scrollable line-based spec viewer
-# ---------------------------------------------------------------------------
-
-class SpecPager(ScrollView):
-    """Renders spec lines with line numbers, cursor highlight, and gutter indicators.
-
-    Uses the Textual Line API (ScrollView) for efficient virtual scrolling.
-    Each visual row is rendered on-demand via render_line().
-    """
-
-    DEFAULT_CSS = """
-    SpecPager {
-        overflow-y: auto;
-        overflow-x: hidden;
-        scrollbar-size: 0 0;
-    }
-    """
-
-    # Disable inherited ScrollableContainer bindings — the App handles all keys
-    BINDINGS = []
-
-    cursor_line = reactive(1)
-    search_query = reactive("")
-
-    def __init__(self, state: ReviewState, **kwargs):
-        super().__init__(**kwargs)
-        self.state = state
-        self._table_blocks: dict[int, TableBlock] | None = None
-        self.wrap_width: int = 0  # 0 = no wrapping
-        self.show_line_numbers: bool = True
-        # Visual row model: list of tuples describing each visual row
-        # Each entry: ("spec", spec_index) | ("table_border", spec_index, "top"/"bottom")
-        self._visual_rows: list[tuple] = []
-        # Precomputed code-block state per spec line index (state BEFORE the line)
-        self._code_state_map: dict[int, bool] = {}
-        # Map from spec line number (1-based) to first visual row index
-        self._spec_to_visual: dict[int, int] = {}
-        self._rich_console = Console(width=200, no_color=False)
-
-    def _gutter_width(self) -> tuple[int, int]:
-        """Return (num_width, gutter_total) based on show_line_numbers."""
-        num_width = max(len(str(len(self.state.spec_lines))), 3) if self.show_line_numbers else 0
-        gutter_total = (2 + num_width + 2) if self.show_line_numbers else 3  # prefix + indicator + space
-        return num_width, gutter_total
-
-    def invalidate_table_cache(self) -> None:
-        self._table_blocks = None
-
-    def rebuild_visual_model(self) -> None:
-        """Rebuild the visual row model from spec lines.
-
-        The model accounts for table border rows and wrapped continuation rows.
-        Row types:
-          ("spec", spec_idx)              - a spec line (or first segment if wrapped)
-          ("spec_wrap", spec_idx, seg)    - continuation segment of a wrapped line
-          ("table_border", spec_idx, pos) - table top/bottom border
-        """
-        lines = self.state.spec_lines
-        if self._table_blocks is None:
-            self._table_blocks = scan_table_blocks(lines)
-
-        width = self.size.width if self.size.width > 0 else 200
-        _, gutter_total = self._gutter_width()
-        content_width = width - gutter_total if self.wrap_width > 0 else 0
-
-        rows: list[tuple] = []
-        in_code = False
-        code_state_map: dict[int, bool] = {}
-        spec_to_vis: dict[int, int] = {}
-        i = 0
-
-        while i < len(lines):
-            line = lines[i]
-            table_block = self._table_blocks.get(i)
-            is_table = table_block is not None and not self.search_query
-
-            code_state_map[i] = in_code
-
-            if line.strip().startswith("```"):
-                in_code = not in_code
-
-            if is_table:
-                rel_idx = i - table_block.start_index
-                if rel_idx == 0:
-                    rows.append(("table_border", i, "top"))
-                spec_to_vis[i + 1] = len(rows)
-                rows.append(("spec", i))
-                if rel_idx == len(table_block.lines) - 1:
-                    rows.append(("table_border", i, "bottom"))
-            else:
-                spec_to_vis[i + 1] = len(rows)
-                rows.append(("spec", i))
-                # Add wrapped continuation rows if wrapping is enabled
-                if content_width > 0 and len(line) > content_width:
-                    extra = (len(line) - 1) // content_width  # number of continuation rows
-                    for seg in range(1, extra + 1):
-                        rows.append(("spec_wrap", i, seg))
-
-            i += 1
-
-        self._visual_rows = rows
-        self._code_state_map = code_state_map
-        self._spec_to_visual = spec_to_vis
-        self.virtual_size = Size(width, len(rows))
-
-    def refresh_content(self) -> None:
-        """Call after state changes to rebuild model and redraw."""
-        self.rebuild_visual_model()
-        self.refresh()
-
-    def on_mount(self) -> None:
-        super().on_mount()
-        self.rebuild_visual_model()
-
-    def on_resize(self) -> None:
-        self.rebuild_visual_model()
-
-    def visual_row_for_cursor(self) -> int:
-        """Get the visual row index for the current cursor line."""
-        return self._spec_to_visual.get(self.cursor_line, self.cursor_line - 1)
-
-    def spec_line_at_visual_row(self, vis_row: int) -> int:
-        """Get the spec line number (1-based) at or near a visual row."""
-        if vis_row < 0:
-            return 1
-        if vis_row >= len(self._visual_rows):
-            return self.state.line_count
-        row = self._visual_rows[vis_row]
-        if row[0] == "spec":
-            return row[1] + 1
-        # For table border rows, return the associated spec line
-        return row[1] + 1
-
-    def scroll_cursor_visible(self, center: bool = False) -> None:
-        """Scroll to keep the cursor line visible in the viewport."""
-        vis_row = self.visual_row_for_cursor()
-        view_h = self.size.height
-        if view_h <= 0:
-            return
-        if center:
-            target = max(0, vis_row - view_h // 2)
-            self.scroll_to(y=target, animate=False)
-        else:
-            scroll_top = round(self.scroll_offset.y)
-            if vis_row < scroll_top:
-                self.scroll_to(y=vis_row, animate=False)
-            elif vis_row >= scroll_top + view_h:
-                self.scroll_to(y=vis_row - view_h + 1, animate=False)
-
-    def render_line(self, y: int) -> Strip:
-        """Render a single visual row. Called by Textual's compositor."""
-        virtual_y = y + round(self.scroll_offset.y)
-
-        if virtual_y < 0 or virtual_y >= len(self._visual_rows):
-            return Strip.blank(self.size.width)
-
-        row = self._visual_rows[virtual_y]
-        lines = self.state.spec_lines
-        num_width, gutter_total = self._gutter_width()
-        gutter_blank = " " * gutter_total
-        width = self.size.width
-        content_width = width - gutter_total
-
-        if row[0] == "table_border":
-            _kind, spec_idx, position = row
-            table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
-            text = Text()
-            text.append(gutter_blank, Style(color=THEME["text_dim"]))
-            if table_block:
-                render_table_border(text, table_block.col_widths, position)
-            segments = list(text.render(self._rich_console))
-            return Strip(segments).crop(0, width)
-
-        if row[0] == "spec_wrap":
-            # Continuation segment of a wrapped line
-            _kind, spec_idx, seg = row
-            line = lines[spec_idx]
-            line_num = spec_idx + 1
-            is_cursor = line_num == self.cursor_line
-            cursor_bg = THEME["panel"] if is_cursor else None
-            in_code = self._code_state_map.get(spec_idx, False)
-
-            # Extract the segment of the line for this wrap row
-            start = seg * content_width
-            end = start + content_width
-            segment_text = line[start:end]
-
-            text = Text()
-            # Continuation rows get blank gutter with cursor bg
-            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=cursor_bg))
-            # For blockquote wrap continuations, keep italic + text_muted
-            if not in_code and line.lstrip().startswith("> "):
-                text.append(
-                    segment_text,
-                    Style(color=THEME["text_muted"], italic=True, bgcolor=cursor_bg),
-                )
-            else:
-                content_style = self._line_style(line, in_code, is_cursor)
-                text.append(segment_text, content_style)
-            segments = list(text.render(self._rich_console))
-            return Strip(segments).crop(0, width)
-
-        # Regular spec line (first row, or only row if not wrapped)
-        _kind, spec_idx = row
-        line = lines[spec_idx]
-        line_num = spec_idx + 1
-        is_cursor = line_num == self.cursor_line
-        thread = self.state.thread_at_line(line_num)
-        cursor_bg = THEME["panel"] if is_cursor else None
-        in_code = self._code_state_map.get(spec_idx, False)
-
-        # Table context
-        table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
-        is_table = table_block is not None and not self.search_query
-        rel_idx = spec_idx - table_block.start_index if is_table else -1
-
-        text = Text()
-
-        # Cursor prefix
-        prefix = ">" if is_cursor else " "
-        prefix_color = THEME["mauve"] if is_cursor else THEME["text_dim"]
-        text.append(prefix, Style(color=prefix_color, bgcolor=cursor_bg))
-
-        # Gutter indicator
-        if thread:
-            if self.state.is_unread(thread.id):
-                gutter_style = Style(color=THEME["yellow"], bgcolor=cursor_bg)
-            elif thread.status == "resolved":
-                gutter_style = Style(color=THEME["green"], bgcolor=cursor_bg)
-            else:
-                gutter_style = Style(color=THEME["text"], bgcolor=cursor_bg)
-            text.append("\u2588", gutter_style)
-        else:
-            text.append(" ", Style(bgcolor=cursor_bg))
-
-        # Line number
-        if self.show_line_numbers:
-            num_str = f"{line_num:>{num_width}}  "
-            text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
-        else:
-            text.append(" ", Style(bgcolor=cursor_bg))
-
-        # Content
-        if is_table:
-            if rel_idx == table_block.separator_index:
-                render_table_separator(text, table_block.col_widths)
-            else:
-                is_header = table_block.separator_index >= 0 and rel_idx < table_block.separator_index
-                cells = parse_table_cells(line)
-                render_table_row(text, cells, table_block.col_widths, is_header)
-        else:
-            content_style = self._line_style(line, in_code, is_cursor)
-            # When wrapping, only show first segment
-            content = line if line else " "
-            if self.wrap_width > 0 and len(content) > content_width:
-                content = content[:content_width]
-
-            if self.search_query:
-                cs = self.search_query != self.search_query.lower()
-                q = self.search_query if cs else self.search_query.lower()
-                hay = content if cs else content.lower()
-                if q in hay:
-                    self._append_highlighted(text, content, self.search_query, content_style, is_cursor)
-                else:
-                    text.append(content, content_style)
-            elif self._is_block_element(line, in_code):
-                self._append_line_content(text, content, in_code, is_cursor)
-            elif not in_code and not line.strip().startswith("```"):
-                # Inline markdown for headings and regular lines
-                stripped = line.lstrip()
-                heading_match = re.match(r"^(#{1,6})\s+", stripped)
-                if heading_match:
-                    # Render heading prefix with heading style, then inline-parse content
-                    prefix_len = heading_match.end()
-                    lead_spaces = len(line) - len(stripped)
-                    heading_content = content[lead_spaces + prefix_len:]
-                    # Append the # prefix portion
-                    text.append(content[:lead_spaces + prefix_len], content_style)
-                    # Inline-parse the heading text
-                    self._append_inline_styled(text, heading_content, content_style)
-                else:
-                    self._append_inline_styled(text, content, content_style)
-            else:
-                text.append(content, content_style)
-
-        segments = list(text.render(self._rich_console))
-        return Strip(segments).crop(0, width)
-
-    # Regex for horizontal rules: 3+ of the same char (-, *, _) with optional spaces
-    _HR_RE = re.compile(r"^(\s*[-*_]\s*){3,}$")
-    # Regex for unordered list items: optional indent + marker + space + content
-    _UL_RE = re.compile(r"^(\s*)([-*+])\s+(.*)")
-
-    def _line_style(self, line: str, in_code_block: bool, is_cursor: bool) -> Style:
-        bg = THEME["panel"] if is_cursor else None
-
-        # Fence line (``` markers) — dim
-        if line.strip().startswith("```"):
-            return Style(color=THEME["text_dim"], bgcolor=bg)
-        # Inside code block — green, no markdown parsing
-        if in_code_block:
-            return Style(color=THEME["green"], bgcolor=bg)
-
-        stripped = line.lstrip()
-        heading_match = re.match(r"^(#{1,6})\s+", stripped)
-        if heading_match:
-            level = len(heading_match.group(1))
-            color = THEME["blue"] if level <= 2 else THEME["mauve"] if level == 3 else THEME["text_muted"]
-            return Style(color=color, bold=True, bgcolor=bg)
-        # Blockquotes, list items, and horizontal rules are handled by
-        # _append_line_content for multi-segment rendering; return default
-        # style here as fallback.
-        else:
-            return Style(color=THEME["text"], bgcolor=bg)
-
-    def _is_block_element(self, line: str, in_code_block: bool) -> bool:
-        """Return True if line needs multi-segment rendering (blockquote, list, hr)."""
-        if in_code_block or line.strip().startswith("```"):
-            return False
-        stripped = line.lstrip()
-        if stripped.startswith("> "):
-            return True
-        if self._UL_RE.match(line):
-            return True
-        if self._HR_RE.match(line):
-            return True
-        return False
-
-    def _append_line_content(
-        self, text: Text, line: str, in_code_block: bool, is_cursor: bool,
-    ) -> None:
-        """Append styled markdown content segments to *text*.
-
-        Handles blockquotes (│ prefix), list items (• bullet), and horizontal
-        rules (─×40).  Falls back to ``_line_style`` for everything else.
-        """
-        bg = THEME["panel"] if is_cursor else None
-
-        # Skip block-element handling inside code blocks / fences
-        if not in_code_block and not line.strip().startswith("```"):
-            stripped = line.lstrip()
-
-            # Horizontal rule: --- / *** / ___
-            if self._HR_RE.match(line):
-                text.append("\u2500" * 40, Style(color=THEME["text_dim"], dim=True, bgcolor=bg))
-                return
-
-            # Blockquote: > text  →  │ <text in italic + text_muted>
-            if stripped.startswith("> "):
-                text.append("\u2502 ", Style(color=THEME["mauve"], bgcolor=bg))
-                bq_style = Style(color=THEME["text_muted"], italic=True, bgcolor=bg)
-                self._append_inline_styled(text, stripped[2:], bq_style)
-                return
-
-            # Unordered list: - / * / + item  →  • item
-            ul_match = self._UL_RE.match(line)
-            if ul_match:
-                indent = ul_match.group(1)
-                item_text = ul_match.group(3)
-                text.append(indent + "\u2022 ", Style(color=THEME["yellow"], bgcolor=bg))
-                item_style = Style(color=THEME["text"], bgcolor=bg)
-                self._append_inline_styled(text, item_text, item_style)
-                return
-
-        # Default: single-style rendering
-        style = self._line_style(line, in_code_block, is_cursor)
-        text.append(line if line else " ", style)
-
-    def _append_inline_styled(
-        self, text: Text, content: str, base_style: Style,
-    ) -> None:
-        """Append *content* to *text*, rendering inline markdown with styles.
-
-        Each inline markdown segment (bold, italic, code, link, etc.) is styled
-        by merging the segment-specific style on top of *base_style*.  Plain
-        text segments inherit *base_style* unchanged.
-        """
-        for seg_text, seg_kwargs in parse_inline_markdown(content):
-            if seg_kwargs:
-                seg_style = base_style + Style(**seg_kwargs)
-                text.append(seg_text, seg_style)
-            else:
-                text.append(seg_text, base_style)
-
-    def _append_highlighted(
-        self, text: Text, content: str, query: str,
-        base_style: Style, is_cursor: bool,
-    ) -> None:
-        case_sensitive = query != query.lower()
-        q = query if case_sensitive else query.lower()
-        haystack = content if case_sensitive else content.lower()
-        pos = 0
-        while pos < len(content):
-            idx = haystack.find(q, pos)
-            if idx == -1:
-                text.append(content[pos:], base_style)
-                break
-            if idx > pos:
-                text.append(content[pos:idx], base_style)
-            text.append(
-                content[idx:idx + len(query)],
-                Style(color="#1e1e2e", bgcolor=THEME["yellow"], bold=True),
-            )
-            pos = idx + len(query)
-
-
-
-
-# ---------------------------------------------------------------------------
-# Search modal
-# ---------------------------------------------------------------------------
-
-class SearchScreen(ModalScreen[tuple[str, int] | None]):
-    """Bottom-bar search input."""
-
-    CSS = """
-    SearchScreen {
-        align: left bottom;
-    }
-    #search-bar {
-        width: 100%;
-        height: 1;
-        background: #313244;
-    }
-    #search-input {
-        width: 100%;
-    }
-    """
-
-    def __init__(self, spec_lines: list[str], cursor_line: int, on_preview=None, **kwargs):
-        super().__init__(**kwargs)
-        self.spec_lines = spec_lines
-        self.start_line = cursor_line
-        self._on_preview = on_preview
-
-    def compose(self) -> ComposeResult:
-        with Horizontal(id="search-bar"):
-            yield Static("/", classes="search-prefix")
-            yield Input(id="search-input", placeholder="Search...")
-
-    def on_mount(self) -> None:
-        self.query_one("#search-input", Input).focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Incremental search — preview highlights as you type."""
-        if self._on_preview:
-            raw = event.value.strip()
-            self._on_preview(raw if len(raw) >= 3 else None)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        query = event.value.strip()
-        if not query:
-            self.dismiss(None)
-            return
-        match = self._find_match(query, self.start_line, 1)
-        if match is not None:
-            self.dismiss((query, match))
-        else:
-            inp = self.query_one("#search-input", Input)
-            inp.value = ""
-            inp.placeholder = "No match"
-            inp.styles.color = THEME["red"]
-
-    def on_key(self, event: Key) -> None:
-        if event.key in ("escape", "ctrl+c"):
-            event.prevent_default()
-            event.stop()
-            self.dismiss(None)
-
-    def _find_match(self, query: str, current: int, direction: int) -> int | None:
-        case_sensitive = query != query.lower()
-        q = query if case_sensitive else query.lower()
-        total = len(self.spec_lines)
-        for offset in range(1, total + 1):
-            i = (current - 1 + offset * direction) % total
-            line = self.spec_lines[i] if case_sensitive else self.spec_lines[i].lower()
-            if q in line:
-                return i + 1
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Confirm dialog
-# ---------------------------------------------------------------------------
-
-class ConfirmScreen(ModalScreen[bool]):
-    """Simple y/n confirmation."""
-
-    CSS = """
-    ConfirmScreen {
-        align: center middle;
-    }
-    #confirm-dialog {
-        width: 44%;
-        height: 9;
-        border: solid #cba6f7;
-        background: #313244;
-        padding: 1 2;
-    }
-    #confirm-title {
-        text-style: bold;
-        color: #f9e2af;
-    }
-    #confirm-hints {
-        color: #6c7086;
-        margin-top: 1;
-    }
-    """
-
-    def __init__(self, title: str, message: str, **kwargs):
-        super().__init__(**kwargs)
-        self.title_text = title
-        self.message_text = message
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-dialog"):
-            yield Static(self.title_text, id="confirm-title")
-            yield Static(self.message_text)
-            yield Static("[y/Enter] Confirm  [q/Esc] Cancel", id="confirm-hints")
-
-    def on_key(self, event: Key) -> None:
-        event.prevent_default()
-        event.stop()
-        if event.key in ("y", "enter"):
-            self.dismiss(True)
-        elif event.key in ("q", "escape", "ctrl+c"):
-            self.dismiss(False)
-
-
-# ---------------------------------------------------------------------------
-# Thread list modal
-# ---------------------------------------------------------------------------
-
-class ThreadListScreen(ModalScreen[int | None]):
-    """List all threads for navigation. Sorted by status, filterable with Ctrl+F."""
-
-    STATUS_ORDER = {"open": 0, "pending": 1, "resolved": 2}
-    FILTER_CYCLE = ["all", "active", "resolved"]
-
-    CSS = """
-    ThreadListScreen {
-        align: center middle;
-    }
-    #thread-list-dialog {
-        width: 56%;
-        height: 50%;
-        border: solid #89b4fa;
-        background: #313244;
-        padding: 1 2;
-    }
-    #thread-list-title {
-        text-style: bold;
-        color: #89b4fa;
-        margin-bottom: 1;
-    }
-    .thread-item {
-        height: 1;
-    }
-    .thread-item-selected {
-        height: 1;
-        background: #313244;
-        color: #f5c2e7;
-    }
-    #thread-hints {
-        color: #6c7086;
-        margin-top: 1;
-    }
-    """
-
-    def __init__(self, threads: list[Thread], **kwargs):
-        super().__init__(**kwargs)
-        self._all_threads = [t for t in threads if t.status in ("open", "pending", "resolved")]
-        self._filter_mode = "all"
-        self.threads = self._filtered_sorted()
-        self.selected_idx = 0
-
-    def _filtered_sorted(self) -> list[Thread]:
-        if self._filter_mode == "active":
-            filtered = [t for t in self._all_threads if t.status in ("open", "pending")]
-        elif self._filter_mode == "resolved":
-            filtered = [t for t in self._all_threads if t.status == "resolved"]
-        else:
-            filtered = list(self._all_threads)
-        return sorted(filtered, key=lambda t: (self.STATUS_ORDER.get(t.status, 3), t.line))
-
-    def _title_text(self) -> str:
-        active = sum(1 for t in self._all_threads if t.status in ("open", "pending"))
-        total = len(self._all_threads)
-        return f"Threads ({active} active, {total} total) [{self._filter_mode}]"
-
-    @staticmethod
-    def _preview_text(t: Thread) -> str:
-        raw = t.messages[0].text.replace("\n", " ") if t.messages else ""
-        return (raw[:49] + "\u2026") if len(raw) > 50 else raw
-
-    STATUS_COLORS = {"open": THEME["text"], "pending": THEME["yellow"], "resolved": THEME["green"]}
-
-    def _hints_text(self) -> str:
-        return f"[j/k] Navigate  [Enter] Jump  [Ctrl+f] Filter: {self._filter_mode}  [q/Esc] Close"
-
-    def _render_item(self, t: Thread) -> Text:
-        icon = STATUS_ICONS.get(t.status, " ")
-        color = self.STATUS_COLORS.get(t.status, THEME["text_dim"])
-        preview = self._preview_text(t)
-        text = Text()
-        text.append(f" {icon}", Style(color=color))
-        text.append(f" #{t.id} line {t.line}: {preview}")
-        return text
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="thread-list-dialog"):
-            yield Static(self._title_text(), id="thread-list-title")
-            if self.threads:
-                for i, t in enumerate(self.threads):
-                    cls = "thread-item-selected" if i == 0 else "thread-item"
-                    yield Static(self._render_item(t), classes=cls)
-            else:
-                yield Static(" No threads. Press [Esc] to close.", classes="thread-item")
-            yield Static(self._hints_text(), id="thread-hints")
-
-    async def on_key(self, event: Key) -> None:
-        event.prevent_default()
-        event.stop()
-        if event.key in ("escape", "q", "ctrl+c"):
-            self.dismiss(None)
-        elif event.key == "enter":
-            if self.threads:
-                self.dismiss(self.threads[self.selected_idx].line)
-        elif event.key in ("j", "down"):
-            self._move(1)
-        elif event.key in ("k", "up"):
-            self._move(-1)
-        elif event.key == "ctrl+f":
-            idx = (self.FILTER_CYCLE.index(self._filter_mode) + 1) % 3
-            self._filter_mode = self.FILTER_CYCLE[idx]
-            self.threads = self._filtered_sorted()
-            self.selected_idx = 0
-            await self._rebuild_items()
-
-    async def _rebuild_items(self) -> None:
-        """Remove old thread items and rebuild from current filter."""
-        # Remove existing thread items — must await to avoid DuplicateIds
-        for widget in list(self.query(".thread-item, .thread-item-selected")):
-            await widget.remove()
-        # Insert new items before the hints widget
-        hints = self.query_one("#thread-hints", Static)
-        dialog = self.query_one("#thread-list-dialog", Vertical)
-        for i, t in enumerate(self.threads):
-            cls = "thread-item-selected" if i == 0 else "thread-item"
-            widget = Static(self._render_item(t), classes=cls)
-            dialog.mount(widget, before=hints)
-        self.query_one("#thread-list-title", Static).update(self._title_text())
-        self.query_one("#thread-hints", Static).update(self._hints_text())
-
-    def _move(self, delta: int) -> None:
-        if not self.threads:
-            return
-        old = self.selected_idx
-        self.selected_idx = (self.selected_idx + delta) % len(self.threads)
-        if old != self.selected_idx:
-            items = list(self.query(".thread-item, .thread-item-selected"))
-            if old < len(items):
-                items[old].set_classes("thread-item")
-            if self.selected_idx < len(items):
-                items[self.selected_idx].set_classes("thread-item-selected")
-
-
-# ---------------------------------------------------------------------------
-# Help screen
-# ---------------------------------------------------------------------------
-
-class HelpScreen(ModalScreen[None]):
-    CSS = """
-    HelpScreen {
-        align: center middle;
-    }
-    #help-dialog {
-        width: 60;
-        height: 24;
-        border: solid $accent;
-        background: #313244;
-        padding: 1 2;
-    }
-    #help-scroll {
-        height: 1fr;
-        overflow-y: auto;
-    }
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._pending_g = False
-
-    def compose(self) -> ComposeResult:
-        from importlib.metadata import version as pkg_version
-        try:
-            ver = pkg_version("revspec")
-        except Exception:
-            ver = "dev"
-        help_text = f"""\
-[bold #89b4fa]revspec v{ver}[/]
-
-[bold #89b4fa]Keyboard Reference[/]
-
-[bold]Quick Start[/]
-  Navigate to a line and press c to comment.
-  The AI replies in real-time via the thread popup.
-  Press r to resolve, S to submit for rewrite.
-  Press A to approve when done.
-
-[bold]Thread Popup[/]
-  New thread: INSERT mode (green border) — type and Tab to send.
-  Existing thread: NORMAL mode (blue border) — scroll conversation,
-  c to reply, r to resolve, q/Esc to close.
-
-[bold]Navigation[/]
-  j/k          Down/up
-  gg/G         Top/bottom
-  Ctrl+D/U     Half page down/up
-  zz           Center cursor line
-  /            Search (smartcase)
-  n/N          Next/prev match
-  Esc          Clear search
-  ]t/\\[t        Next/prev thread
-  ]r/\\[r        Next/prev unread
-  ]1/\\[1        Next/prev h1 heading
-  ]2/\\[2        Next/prev h2 heading
-  ]3/\\[3        Next/prev h3 heading
-  Ctrl+O/I     Jump list back/forward
-  ''           Jump to previous position
-  H/M/L        Screen top/middle/bottom
-
-[bold]Review[/]
-  c            Comment / view thread
-  r            Resolve thread (toggle)
-  R            Resolve all pending
-  dd           Delete thread
-  t            List threads (Ctrl+F to filter)
-  S            Submit for rewrite
-  A            Approve spec
-
-[bold]Toggles[/]
-  \\w           Toggle line wrapping
-  \\n           Toggle line numbers
-
-[bold]Other[/]
-  Ctrl+R       Reload spec
-  Ctrl+C       Force quit
-
-[bold]Commands[/]
-  :q/:wq       Quit (warns if unresolved)
-  :q!          Force quit
-  :{{N}}         Jump to line N
-  :wrap        Toggle line wrapping
-  :submit      Submit for rewrite (same as S)
-  :approve     Approve spec (same as A)
-  :resolve     Resolve thread (same as r)
-  :reload      Reload spec (same as Ctrl+R)
-  :help        Show this help (same as ?)
-
-[bold]Press q or Esc to close[/]
-"""
-        with Vertical(id="help-dialog"):
-            with VerticalScroll(id="help-scroll"):
-                yield Static(help_text)
-
-    def on_key(self, event: Key) -> None:
-        event.prevent_default()
-        event.stop()
-        key = event.key
-        if key in ("escape", "q", "question_mark", "ctrl+c"):
-            self.dismiss(None)
-        elif key in ("j", "down"):
-            self.query_one("#help-scroll", VerticalScroll).scroll_down()
-        elif key in ("k", "up"):
-            self.query_one("#help-scroll", VerticalScroll).scroll_up()
-        elif key == "ctrl+d":
-            h = self.query_one("#help-scroll", VerticalScroll)
-            h.scroll_to(y=h.scroll_offset.y + 5)
-        elif key == "ctrl+u":
-            h = self.query_one("#help-scroll", VerticalScroll)
-            h.scroll_to(y=max(0, h.scroll_offset.y - 5))
-        elif key == "g":
-            if self._pending_g:
-                self._pending_g = False
-                self.query_one("#help-scroll", VerticalScroll).scroll_home()
-            else:
-                self._pending_g = True
-                self.set_timer(0.3, self._clear_pending_g)
-        elif key in ("shift+g", "G"):
-            self._pending_g = False
-            self.query_one("#help-scroll", VerticalScroll).scroll_end()
-
-    def _clear_pending_g(self) -> None:
-        self._pending_g = False
-
-
-# ---------------------------------------------------------------------------
-# Spinner screen — shown during submit while waiting for AI rewrite
-# ---------------------------------------------------------------------------
-
-class SpinnerScreen(ModalScreen[str]):
-    """Modal spinner with elapsed time, cancellable via Ctrl+C.
-
-    Dismiss results: "success" (spec reloaded), "cancel" (user Ctrl+C), "timeout".
-    """
-
-    SPINNER_FRAMES = ["|", "/", "-", "\\"]
-    TIMEOUT_SEC = 120
-
-    CSS = """
-    SpinnerScreen { align: center middle; }
-    #spinner-dialog {
-        width: 50;
-        height: 7;
-        border: solid #cba6f7;
-        background: #313244;
-        padding: 1 2;
-        content-align: center middle;
-    }
-    #spinner-text {
-        text-align: center;
-    }
-    #spinner-hints {
-        color: #6c7086;
-        text-align: center;
-        margin-top: 1;
-    }
-    """
-
-    def __init__(self, thread_count: int, **kwargs):
-        super().__init__(**kwargs)
-        self._thread_count = thread_count
-        self._frame = 0
-        self._start_time = 0.0
-        self._timer = None
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="spinner-dialog"):
-            frame = self.SPINNER_FRAMES[0]
-            yield Static(f"{frame} Submitting {self._thread_count} thread(s)...", id="spinner-text")
-            yield Static("[Ctrl+C] Cancel", id="spinner-hints")
-
-    def on_mount(self) -> None:
-        self._start_time = time.monotonic()
-        self._timer = self.set_interval(0.08, self._tick)
-
-    def _spinner_text(self, elapsed: int) -> str:
-        frame = self.SPINNER_FRAMES[self._frame % len(self.SPINNER_FRAMES)]
-        plural = "" if self._thread_count == 1 else "s"
-        return f"{frame} Submitting {self._thread_count} thread{plural}...  ({elapsed}s)"
-
-    def _tick(self) -> None:
-        self._frame += 1
-        elapsed = int(time.monotonic() - self._start_time)
-        if elapsed >= self.TIMEOUT_SEC:
-            if self._timer:
-                self._timer.stop()
-            self.dismiss("timeout")
-            return
-        self.query_one("#spinner-text", Static).update(self._spinner_text(elapsed))
-
-    def on_key(self, event: Key) -> None:
-        event.stop()
-        if event.key == "ctrl+c":
-            event.prevent_default()
-            if self._timer:
-                self._timer.stop()
-            self.dismiss("cancel")
 
 
 # ---------------------------------------------------------------------------
@@ -929,14 +49,6 @@ class RevspecApp(App):
         height: 1;
         background: #313244;
         color: #a6adc8;
-    }
-    #command-bar {
-        height: 1;
-        background: #313244;
-        display: none;
-    }
-    #command-input {
-        width: 100%;
     }
     """
 
@@ -973,12 +85,10 @@ class RevspecApp(App):
         self._pending_key: str | None = None
         self._pending_timer: float = 0
         self._pending_key_timer: object | None = None
-        self._build_sequence_maps()
+        self._seq_router = SequenceRouter()
 
         # Jump list — mirrors vim :jumps (TS app.ts:161-184)
-        self._jump_list: list[int] = [1]
-        self._jump_index: int = 0
-        self.MAX_JUMP_LIST = 50
+        self._jump_list = JumpList()
 
         # Transient message timer handle
         self._message_timer = None
@@ -995,7 +105,7 @@ class RevspecApp(App):
 
         # Live watcher
         self._live_watcher_timer = None
-        self._live_watcher_offset = 0
+        self._watcher_service = LiveWatcherService(self.jsonl_path)
 
     def compose(self) -> ComposeResult:
         yield Static(self._top_bar_text(), id="top-bar")
@@ -1006,8 +116,7 @@ class RevspecApp(App):
     def on_mount(self) -> None:
         self._refresh()
         # Start live watcher polling
-        if os.path.exists(self.jsonl_path):
-            self._live_watcher_offset = os.path.getsize(self.jsonl_path)
+        self._watcher_service.init_offset()
         self._live_watcher_timer = self.set_interval(0.5, self._check_live_events)
         # Welcome hint on first launch
         if not self.state.threads:
@@ -1024,14 +133,10 @@ class RevspecApp(App):
         self._spec_mtime = new_mtime
         self._spec_mtime_changed = False
         self.search_query = None
-        self._jump_list = [1]
-        self._jump_index = 0
+        self._jump_list = JumpList()
         if self.pager_widget:
             self.pager_widget.invalidate_table_cache()
-        if os.path.exists(self.jsonl_path):
-            self._live_watcher_offset = os.path.getsize(self.jsonl_path)
-        else:
-            self._live_watcher_offset = 0
+        self._watcher_service.init_offset()
 
     def _check_spec_reload(self) -> None:
         """Poll spec file mtime for reload after submit."""
@@ -1066,159 +171,71 @@ class RevspecApp(App):
 
     def _check_live_events(self) -> None:
         """Poll JSONL for owner events (AI replies)."""
-        try:
-            events, new_offset = read_events(self.jsonl_path, self._live_watcher_offset)
-            self._live_watcher_offset = new_offset  # always advance
-            if events:
-                owner_events = [e for e in events if e.author == "owner"]
-                last_reply_line = None
-                last_reply_thread_id = None
-                changed = False
-                for e in owner_events:
-                    if e.type == "reply" and e.thread_id and e.text:
-                        self.state.add_owner_reply(e.thread_id, e.text, e.ts)
-                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
-                        if t:
-                            last_reply_line = t.line
-                            last_reply_thread_id = e.thread_id
-                        # Push into open CommentScreen if it's showing this thread
-                        from .comment_screen import CommentScreen as CS
-                        from .protocol import Message
-                        active = self.screen
-                        if isinstance(active, CS) and active.existing_thread and active.existing_thread.id == e.thread_id:
-                            active.add_message(Message(author="owner", text=e.text, ts=e.ts))
-                        changed = True
-                    elif e.type == "resolve" and e.thread_id:
-                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
-                        if t and t.status != "resolved":
-                            t.status = "resolved"
-                            changed = True
-                    elif e.type == "unresolve" and e.thread_id:
-                        t = next((t for t in self.state.threads if t.id == e.thread_id), None)
-                        if t and t.status == "resolved":
-                            t.status = "open"
-                            changed = True
-                    elif e.type == "delete" and e.thread_id:
-                        before = len(self.state.threads)
-                        self.state.delete_thread(e.thread_id)
-                        if len(self.state.threads) < before:
-                            changed = True
-                if changed:
-                    self._refresh()
-                    # Only flash if CommentScreen is not open for this thread
-                    if last_reply_line:
-                        from .comment_screen import CommentScreen as CS2
-                        active = self.screen
-                        suppress = isinstance(active, CS2) and active.existing_thread and active.existing_thread.id == last_reply_thread_id
-                        if not suppress:
-                            self._show_transient(f"AI replied on line {last_reply_line}", "info")
-        except OSError:
-            pass
+        result = self._watcher_service.poll()
+        if not result.has_new:
+            return
+
+        last_reply_line = None
+        last_reply_thread_id = None
+        changed = False
+        for e in result.events:
+            if e.type == "reply" and e.thread_id and e.text:
+                self.state.add_owner_reply(e.thread_id, e.text, e.ts)
+                t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                if t:
+                    last_reply_line = t.line
+                    last_reply_thread_id = e.thread_id
+                # Push into open CommentScreen if it's showing this thread
+                active = self.screen
+                if isinstance(active, CommentScreen) and active.existing_thread and active.existing_thread.id == e.thread_id:
+                    active.add_message(Message(author="owner", text=e.text, ts=e.ts))
+                changed = True
+            elif e.type == "resolve" and e.thread_id:
+                t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                if t and t.status != "resolved":
+                    t.status = "resolved"
+                    changed = True
+            elif e.type == "unresolve" and e.thread_id:
+                t = next((t for t in self.state.threads if t.id == e.thread_id), None)
+                if t and t.status == "resolved":
+                    t.status = "open"
+                    changed = True
+            elif e.type == "delete" and e.thread_id:
+                before = len(self.state.threads)
+                self.state.delete_thread(e.thread_id)
+                if len(self.state.threads) < before:
+                    changed = True
+        if changed:
+            self._refresh()
+            # Only flash if CommentScreen is not open for this thread
+            if last_reply_line:
+                active = self.screen
+                suppress = isinstance(active, CommentScreen) and active.existing_thread and active.existing_thread.id == last_reply_thread_id
+                if not suppress:
+                    self._show_transient(f"AI replied on line {last_reply_line}", "info")
 
     def _top_bar_text(self) -> Text:
-        text = Text()
-        name = Path(self.spec_file).name
-        text.append(f" {name}", Style(color=THEME["text"], bold=True))
-
-        # Thread progress
-        if self.state.threads:
-            resolved = sum(1 for t in self.state.threads if t.status == "resolved")
-            total = len(self.state.threads)
-            color = THEME["green"] if resolved == total else THEME["yellow"]
-            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-            text.append(f"{resolved}/{total} resolved", Style(color=color))
-
-        # Unread replies
-        if self.state.unread_count > 0:
-            n = self.state.unread_count
-            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-            text.append(
-                f"{n} new {'reply' if n == 1 else 'replies'}",
-                Style(color=THEME["yellow"], bold=True),
-            )
-
-        # Spec mutation guard
-        if hasattr(self, "_spec_mtime_changed") and self._spec_mtime_changed:
-            text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-            text.append("!! Spec changed externally (Ctrl+R to reload)", Style(color=THEME["red"], bold=True))
-
-        # Position
-        cur = self.state.cursor_line
-        total = self.state.line_count
-        if cur <= 1:
-            pos_label = "Top"
-        elif cur >= total:
-            pos_label = "Bot"
-        else:
-            pos_label = f"{round((cur - 1) / max(1, total - 1) * 100)}%"
-        text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-        text.append(f"L{cur}/{total} {pos_label}", Style(color=THEME["text_muted"]))
-
-        # Section breadcrumb
-        for i in range(cur - 1, -1, -1):
-            line = self.state.spec_lines[i]
-            m = re.match(r"^(#{1,3})\s+(.+)", line)
-            if m:
-                text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-                text.append(m.group(2).strip(), Style(color=THEME["text_dim"], italic=True))
-                break
-
-        return text
+        return build_top_bar(
+            file_name=Path(self.spec_file).name,
+            threads=self.state.threads,
+            unread_count=self.state.unread_count,
+            cursor_line=self.state.cursor_line,
+            line_count=self.state.line_count,
+            spec_lines=self.state.spec_lines,
+            mtime_changed=self._spec_mtime_changed,
+        )
 
     @staticmethod
     def _build_hints(hints: list[tuple[str, str]]) -> Text:
-        """Build a styled hint bar from (key, action) pairs.
-
-        Matches the TypeScript buildHints() format:
-        - ``[key]`` in THEME["blue"]
-        - ``action`` in THEME["text_muted"]
-        - Double space between hint pairs
-        """
-        text = Text()
-        text.append(" ")
-        key_style = Style(color=THEME["blue"])
-        action_style = Style(color=THEME["text_muted"])
-        for i, (key, action) in enumerate(hints):
-            text.append(f"[{key}]", key_style)
-            text.append(f" {action}", action_style)
-            if i < len(hints) - 1:
-                text.append("  ")
-        return text
+        return build_hints(hints)
 
     def _bottom_bar_text(self, message: str | None = None, icon: str | None = None) -> Text:
-        text = Text()
-        if message:
-            if icon == "info":
-                text.append(" - ", Style(color=THEME["blue"]))
-            elif icon == "warn":
-                text.append(" ! ", Style(color=THEME["yellow"]))
-            elif icon == "success":
-                text.append(" * ", Style(color=THEME["green"]))
-            text.append(f" {message}", Style(color=THEME["text_muted"]))
-        else:
-            # Thread preview when cursor is on a thread line
-            thread = self.state.thread_at_line(self.state.cursor_line)
-            if thread and thread.messages and self._message_timer is None:
-                first = thread.messages[0].text.replace("\n", " ")
-                preview = first[:59] + "\u2026" if len(first) > 60 else first
-                replies = len(thread.messages) - 1
-                reply_str = f" ({replies} {'reply' if replies == 1 else 'replies'})" if replies > 0 else ""
-                text.append(f" {preview}{reply_str} [{thread.status}]", Style(color=THEME["text_muted"]))
-            else:
-                has_thread = thread is not None
-                hints: list[tuple[str, str]] = [
-                    ("j/k", "navigate"),
-                    ("c", "comment"),
-                ]
-                if has_thread:
-                    hints.append(("r", "resolve"))
-                hints.extend([
-                    ("S", "submit"),
-                    ("A", "approve"),
-                    ("?", "help"),
-                ])
-                text = self._build_hints(hints)
-        return text
+        return build_bottom_bar(
+            message=message,
+            icon=icon,
+            thread=self.state.thread_at_line(self.state.cursor_line),
+            has_active_message=self._message_timer is not None,
+        )
 
     def _refresh(self) -> None:
         # Spec mutation guard
@@ -1259,52 +276,25 @@ class RevspecApp(App):
     # --- Jump list ---
 
     def _push_jump(self) -> None:
-        """Record current position in jump list before a big jump."""
-        cur = self.state.cursor_line
-        if self._jump_index < len(self._jump_list) - 1:
-            self._jump_list[self._jump_index + 1:] = []
-        if self._jump_list and self._jump_list[-1] == cur:
-            return
-        self._jump_list.append(cur)
-        if len(self._jump_list) > self.MAX_JUMP_LIST:
-            self._jump_list.pop(0)
-        self._jump_index = len(self._jump_list) - 1
+        self._jump_list.push(self.state.cursor_line)
 
     def _jump_backward(self) -> None:
-        """Ctrl+O — jump back in jump list."""
-        if self._jump_index == len(self._jump_list) - 1:
-            cur = self.state.cursor_line
-            if self._jump_list[self._jump_index] != cur:
-                self._jump_list.append(cur)
-                if len(self._jump_list) > self.MAX_JUMP_LIST:
-                    self._jump_list.pop(0)
-                self._jump_index = len(self._jump_list) - 1
-        if self._jump_index > 0:
-            self._jump_index -= 1
-            self.state.cursor_line = min(self._jump_list[self._jump_index], self.state.line_count)
+        target = self._jump_list.backward(self.state.cursor_line, self.state.line_count)
+        if target is not None:
+            self.state.cursor_line = target
             self._refresh()
 
     def _jump_forward(self) -> None:
-        """Ctrl+I / Tab — jump forward in jump list."""
-        if self._jump_index < len(self._jump_list) - 1:
-            self._jump_index += 1
-            self.state.cursor_line = min(self._jump_list[self._jump_index], self.state.line_count)
+        target = self._jump_list.forward(self.state.line_count)
+        if target is not None:
+            self.state.cursor_line = target
             self._refresh()
 
     def _jump_swap(self) -> None:
-        """'' — swap between current position and last jump entry."""
-        if len(self._jump_list) < 2:
-            return
-        cur = self.state.cursor_line
-        if self._jump_index == 0:
-            target_idx = 1
-        else:
-            target_idx = self._jump_index - 1
-        target = self._jump_list[target_idx]
-        self._jump_list[self._jump_index] = cur
-        self._jump_index = target_idx
-        self.state.cursor_line = min(target, self.state.line_count)
-        self._refresh()
+        target = self._jump_list.swap(self.state.cursor_line, self.state.line_count)
+        if target is not None:
+            self.state.cursor_line = target
+            self._refresh()
 
     # --- Multi-key sequence handling ---
 
@@ -1331,50 +321,7 @@ class RevspecApp(App):
         self._pending_key_timer = None
         self.query_one("#bottom-bar", Static).update(self._bottom_bar_text())
 
-    # --- Key sequence registry ---
-    # Each entry: (internal_seq_key, display_hint, hint_label, handler_name)
-    # handler_name is resolved to self.<name> at dispatch time.
-    _SEQUENCE_REGISTRY: list[tuple[str, str, str, str]] = [
-        # ]  prefix
-        ("right_square_brackett", "]t", "thread", "_seq_next_thread"),
-        ("right_square_bracketr", "]r", "unread", "_seq_next_unread"),
-        ("right_square_bracket1", "]1", "h1", "_seq_heading_1_fwd"),
-        ("right_square_bracket2", "]2", "h2", "_seq_heading_2_fwd"),
-        ("right_square_bracket3", "]3", "h3", "_seq_heading_3_fwd"),
-        # [  prefix
-        ("left_square_brackett", "[t", "thread", "_seq_prev_thread"),
-        ("left_square_bracketr", "[r", "unread", "_seq_prev_unread"),
-        ("left_square_bracket1", "[1", "h1", "_seq_heading_1_back"),
-        ("left_square_bracket2", "[2", "h2", "_seq_heading_2_back"),
-        ("left_square_bracket3", "[3", "h3", "_seq_heading_3_back"),
-        # g prefix
-        ("gg", "gg", "top", "_seq_go_top"),
-        # z prefix
-        ("zz", "zz", "center", "_seq_center"),
-        # d prefix
-        ("dd", "dd", "delete", "_delete_thread"),
-        # '  prefix
-        ("apostropheapostrophe", "''", "swap", "_jump_swap"),
-        # \  prefix
-        ("backslashw", "\\w", "wrap", "_toggle_wrap"),
-        ("backslashn", "\\n", "lines", "_toggle_line_numbers"),
-    ]
-
-    def _build_sequence_maps(self) -> None:
-        """Build derived maps from _SEQUENCE_REGISTRY. Called once in __init__."""
-        self._seq_handlers: dict[str, str] = {}
-        self._seq_prefix_hints: dict[str, list[tuple[str, str]]] = {}
-        self._seq_prefixes: set[str] = set()
-        for seq_key, display, label, handler in self._SEQUENCE_REGISTRY:
-            assert hasattr(self, handler), f"_SEQUENCE_REGISTRY: unknown handler {handler!r}"
-            self._seq_handlers[seq_key] = handler
-            # Derive prefix by checking which known prefix names are a prefix of seq_key
-            for pname in ("right_square_bracket", "left_square_bracket",
-                          "apostrophe", "backslash", "g", "z", "d"):
-                if seq_key.startswith(pname) and len(seq_key) > len(pname):
-                    self._seq_prefixes.add(pname)
-                    self._seq_prefix_hints.setdefault(pname, []).append((display, label))
-                    break
+    # --- Key dispatch ---
 
     def on_key(self, event: Key) -> None:
         # Skip key handling when a modal overlay is active
@@ -1389,7 +336,7 @@ class RevspecApp(App):
         if pending:
             event.prevent_default()
             seq = pending + key
-            handler_name = self._seq_handlers.get(seq)
+            handler_name = self._seq_router.resolve(pending, key)
             if handler_name:
                 getattr(self, handler_name)()
             else:
@@ -1398,7 +345,7 @@ class RevspecApp(App):
             return
 
         # Single keys that start sequences
-        if key in self._seq_prefixes:
+        if self._seq_router.is_prefix(key):
             event.prevent_default()
             self._start_pending(key)
             return
@@ -1413,7 +360,7 @@ class RevspecApp(App):
         self._pending_key = key
         self._pending_timer = time.monotonic()
         # Show pending key hint in bottom bar with available options
-        hints = self._seq_prefix_hints.get(key)
+        hints = self._seq_router.hints_for_prefix(key)
         if hints:
             self.query_one("#bottom-bar", Static).update(self._build_hints(hints))
         else:
@@ -1423,7 +370,7 @@ class RevspecApp(App):
     def _handle_single_key(self, event: Key, key: str) -> None:
         """Process a single key press (non-sequence)."""
         # Check if this key starts a new sequence
-        if key in self._seq_prefixes:
+        if self._seq_router.is_prefix(key):
             self._start_pending(key)
             return
 
@@ -1667,13 +614,27 @@ class RevspecApp(App):
         self.push_screen(screen, on_result)
 
     def _open_thread_list(self) -> None:
-        screen = ThreadListScreen(self.state.threads)
+        def on_resolve(thread_id: str) -> None:
+            t = next((t for t in self.state.threads if t.id == thread_id), None)
+            if not t:
+                return
+            was_resolved = t.status == "resolved"
+            self.state.resolve_thread(thread_id)
+            self.state.mark_read(thread_id)
+            event_type = "unresolve" if was_resolved else "resolve"
+            append_event(self.jsonl_path, LiveEvent(
+                type=event_type, thread_id=thread_id, author="reviewer",
+                ts=int(time.time() * 1000),
+            ))
+            self._refresh()
+
+        screen = ThreadListScreen(self.state.threads, on_resolve=on_resolve)
 
         def on_result(line: int | None) -> None:
             if line is not None:
                 self._push_jump()
                 self.state.cursor_line = line
-                self._refresh()
+            self._refresh()
 
         self.push_screen(screen, on_result)
 
@@ -1758,17 +719,7 @@ class RevspecApp(App):
         self._refresh()  # TS silently refreshes on no match
 
     def _is_watcher_running(self) -> bool:
-        """Check if a revspec watch process is monitoring this review."""
-        base = Path(self.spec_file)
-        lock_path = base.parent / (base.stem + ".review.lock")
-        if not lock_path.exists():
-            return False
-        try:
-            pid = int(lock_path.read_text().strip())
-            os.kill(pid, 0)  # signal 0 = check if process exists
-            return True
-        except (ValueError, OSError):
-            return False
+        return is_watcher_running(self.spec_file)
 
     def _submit(self) -> None:
         if not self.state.threads:
@@ -1867,40 +818,34 @@ class RevspecApp(App):
         self.push_screen(screen, on_result)
 
     def _process_command(self, cmd: str) -> None:
-        force_quit = {"q!", "qa!", "wq!", "wqa!", "qw!", "qwa!"}
-        safe_quit = {"q", "qa", "wq", "wqa", "qw", "qwa"}
+        result = parse_command(cmd)
 
-        if cmd in force_quit:
+        if result.action == "force_quit":
             self._exit_tui("session-end")
-        elif cmd in safe_quit:
+        elif result.action == "quit":
             open_c, pending = self.state.active_thread_count()
             if open_c + pending > 0:
                 self._show_transient(f"{open_c + pending} unresolved thread(s). Use :q! to force quit", "warn", 2.0)
             else:
                 self._exit_tui("session-end")
-        elif cmd in ("submit",):
+        elif result.action == "submit":
             self._submit()
-        elif cmd in ("approve",):
+        elif result.action == "approve":
             self._approve()
-        elif cmd in ("help",):
+        elif result.action == "help":
             self.push_screen(HelpScreen())
-        elif cmd in ("resolve",):
+        elif result.action == "resolve":
             self._resolve_current()
-        elif cmd in ("reload",):
+        elif result.action == "reload":
             self._reload_spec()
-        elif cmd == "wrap":
+        elif result.action == "wrap":
             self._toggle_wrap()
-        else:
-            try:
-                line_num = int(cmd)
-                if line_num <= 0:
-                    self._show_transient(f"Unknown command: {cmd}", "warn")
-                else:
-                    self._push_jump()
-                    self.state.cursor_line = min(line_num, self.state.line_count)
-                    self._refresh()
-            except ValueError:
-                self._show_transient(f"Unknown command: {cmd}", "warn")
+        elif result.action == "goto":
+            self._push_jump()
+            self.state.cursor_line = min(result.args["line"], self.state.line_count)
+            self._refresh()
+        elif result.action == "unknown":
+            self._show_transient(f"Unknown command: {cmd}", "warn")
 
     def _exit_tui(self, event_type: str) -> None:
         append_event(self.jsonl_path, LiveEvent(
@@ -1918,43 +863,3 @@ class RevspecApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
-
-
-class CommandScreen(ModalScreen[str | None]):
-    CSS = """
-    CommandScreen {
-        align: left bottom;
-    }
-    #cmd-bar {
-        width: 100%;
-        height: 1;
-        background: #313244;
-    }
-    #cmd-prefix {
-        width: 1;
-        color: #cdd6f4;
-    }
-    #cmd-input {
-        width: 1fr;
-        border: none;
-        padding: 0;
-        height: 1;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Horizontal(id="cmd-bar"):
-            yield Static(":", id="cmd-prefix")
-            yield Input(id="cmd-input")
-
-    def on_mount(self) -> None:
-        self.query_one("#cmd-input", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip())
-
-    def on_key(self, event: Key) -> None:
-        if event.key in ("escape", "ctrl+c"):
-            event.prevent_default()
-            event.stop()
-            self.dismiss(None)

@@ -16,32 +16,24 @@ from rich.style import Style
 
 from .protocol import Thread, Message
 from .theme import THEME
+from .hints import build_hints
 
 
 def _render_hints(mode: str, resolved: bool = False) -> Text:
     """Render hint bar with colored mode label and key brackets."""
-    text = Text()
     if mode == "normal":
-        text.append(" [NORMAL]", Style(color=THEME["blue"], bold=True))
-        text.append("  ")
-        text.append("[i/c]", Style(color=THEME["blue"]))
-        text.append(" reply", Style(color=THEME["text_muted"]))
-        text.append("  ")
-        text.append("[r]", Style(color=THEME["blue"]))
-        resolve_label = " reopen" if resolved else " resolve"
-        text.append(resolve_label, Style(color=THEME["text_muted"]))
-        text.append("  ")
-        text.append("[q/Esc]", Style(color=THEME["blue"]))
-        text.append(" close", Style(color=THEME["text_muted"]))
+        resolve_label = "reopen" if resolved else "resolve"
+        return build_hints(
+            [("i/c", "reply"), ("r", resolve_label), ("q/Esc", "close")],
+            prefix="[NORMAL]",
+            prefix_style=Style(color=THEME["blue"], bold=True),
+        )
     else:
-        text.append(" [INSERT]", Style(color=THEME["mauve"], bold=True))
-        text.append("  ")
-        text.append("[Tab]", Style(color=THEME["blue"]))
-        text.append(" send", Style(color=THEME["text_muted"]))
-        text.append("  ")
-        text.append("[Esc]", Style(color=THEME["blue"]))
-        text.append(" normal", Style(color=THEME["text_muted"]))
-    return text
+        return build_hints(
+            [("Tab", "send"), ("Esc", "normal")],
+            prefix="[INSERT]",
+            prefix_style=Style(color=THEME["mauve"], bold=True),
+        )
 
 
 # Custom TextArea theme to blend with dialog panel background
