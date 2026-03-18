@@ -20,6 +20,9 @@ _HR_RE = re.compile(r"^(\s*[-*_]\s*){3,}$")
 _UL_RE = re.compile(r"^(\s*)([-*+])\s+(.*)")
 
 
+HEADING_RE = re.compile(r"^(#{1,6})\s+")
+
+
 def line_style(line: str, in_code_block: bool, is_cursor: bool) -> Style:
     """Determine the Rich Style for a spec line based on content and context."""
     bg = THEME["panel"] if is_cursor else None
@@ -32,7 +35,7 @@ def line_style(line: str, in_code_block: bool, is_cursor: bool) -> Style:
         return Style(color=THEME["green"], bgcolor=bg)
 
     stripped = line.lstrip()
-    heading_match = re.match(r"^(#{1,6})\s+", stripped)
+    heading_match = HEADING_RE.match(stripped)
     if heading_match:
         level = len(heading_match.group(1))
         color = THEME["blue"] if level <= 2 else THEME["mauve"] if level == 3 else THEME["text_muted"]

@@ -21,6 +21,7 @@ class ReviewState:
         self.cursor_line: int = 1
         self._unread_thread_ids: set[str] = set()
         self._thread_by_id: dict[str, Thread] = {t.id: t for t in self.threads}
+        self._thread_by_line: dict[int, Thread] = {t.line: t for t in self.threads}
 
     @property
     def line_count(self) -> int:
@@ -39,6 +40,7 @@ class ReviewState:
         )
         self.threads.append(thread)
         self._thread_by_id[thread.id] = thread
+        self._thread_by_line[thread.line] = thread
         return thread
 
     def reply_to_thread(self, thread_id: str, text: str) -> None:
@@ -86,15 +88,14 @@ class ReviewState:
         return unread[-1].line if unread else None
 
     def delete_thread(self, thread_id: str) -> None:
+        removed = self._thread_by_id.pop(thread_id, None)
+        if removed is not None:
+            self._thread_by_line.pop(removed.line, None)
         self.threads = [t for t in self.threads if t.id != thread_id]
-        self._thread_by_id.pop(thread_id, None)
         self._unread_thread_ids.discard(thread_id)
 
     def thread_at_line(self, line: int) -> Thread | None:
-        for t in self.threads:
-            if t.line == line:
-                return t
-        return None
+        return self._thread_by_line.get(line)
 
     def next_thread(self) -> int | None:
         if not self.threads:
@@ -168,6 +169,7 @@ class ReviewState:
         self.cursor_line = 1
         self._unread_thread_ids.clear()
         self._thread_by_id.clear()
+        self._thread_by_line.clear()
 
     def delete_last_draft_message(self, thread_id: str) -> None:
         """Remove the last reviewer message from a thread. If thread is empty after, delete it."""
@@ -181,6 +183,7 @@ class ReviewState:
         if not t.messages:
             self.threads = [th for th in self.threads if th.id != thread_id]
             self._thread_by_id.pop(thread_id, None)
+            self._thread_by_line.pop(t.line, None)
 
     def _find_thread(self, thread_id: str) -> Thread | None:
         return self._thread_by_id.get(thread_id)

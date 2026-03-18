@@ -26,8 +26,12 @@ class LiveWatcherService:
 
     def init_offset(self) -> None:
         """Set offset to current file size (skip existing events)."""
-        if os.path.exists(self._jsonl_path):
-            self._offset = os.path.getsize(self._jsonl_path)
+        try:
+            with open(self._jsonl_path, "rb") as f:
+                f.seek(0, 2)
+                self._offset = f.tell()
+        except OSError:
+            self._offset = 0
 
     def poll(self) -> PollResult:
         """Read new events since last poll. Advances offset."""

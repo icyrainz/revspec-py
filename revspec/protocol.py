@@ -47,6 +47,8 @@ def is_valid_event(obj: dict) -> bool:
             return False
         if not isinstance(obj.get("line"), (int, float)):
             return False
+        if int(obj["line"]) < 1:
+            return False
     if t == "round" and not isinstance(obj.get("round"), (int, float)):
         return False
     return True
@@ -74,18 +76,22 @@ def append_event(jsonl_path: str, event: LiveEvent) -> None:
         data["text"] = event.text
     if event.round is not None:
         data["round"] = event.round
-    with open(jsonl_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(data) + "\n")
+    try:
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(data) + "\n")
+            f.flush()
+    except OSError as exc:
+        raise OSError(f"Failed to write event to {jsonl_path}: {exc}") from exc
 
 
 def read_events(jsonl_path: str, offset: int = 0) -> tuple[list[LiveEvent], int]:
     if not os.path.exists(jsonl_path):
-        return [], 0
+        return [], offset
     with open(jsonl_path, "rb") as f:
         f.seek(0, 2)
-        file_size = f.tell()
-        if file_size <= offset:
-            return [], file_size
+        preliminary_size = f.tell()
+        if preliminary_size <= offset:
+            return [], preliminary_size
         f.seek(offset)
         # Mid-line alignment safety: if offset lands mid-line, skip to next newline
         if offset > 0:
@@ -97,6 +103,7 @@ def read_events(jsonl_path: str, offset: int = 0) -> tuple[list[LiveEvent], int]
         else:
             f.seek(offset)
         raw = f.read().decode("utf-8")
+        file_size = f.tell()
 
     events: list[LiveEvent] = []
     for line in raw.splitlines():

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from textual.scroll_view import ScrollView
 from textual.reactive import reactive
 from textual.strip import Strip
@@ -15,7 +13,7 @@ from rich.console import Console
 from .state import ReviewState
 from .theme import THEME, status_icon, status_color
 from .renderer import (
-    line_style, is_block_element, append_line_content,
+    HEADING_RE, line_style, is_block_element, append_line_content,
     append_inline_styled, append_highlighted, gutter_width,
 )
 from .markdown import (
@@ -55,9 +53,14 @@ class SpecPager(ScrollView):
         self._code_state_map: dict[int, bool] = {}
         self._spec_to_visual: dict[int, int] = {}
         self._rich_console = Console(width=200, no_color=False)
+        self._cached_num_width: int = 0
+        self._cached_gutter_total: int = 3
+        self._update_gutter_cache()
 
-    def _gutter_width(self) -> tuple[int, int]:
-        return gutter_width(len(self.state.spec_lines), self.show_line_numbers)
+    def _update_gutter_cache(self) -> None:
+        self._cached_num_width, self._cached_gutter_total = gutter_width(
+            len(self.state.spec_lines), self.show_line_numbers
+        )
 
     def invalidate_table_cache(self) -> None:
         self._table_blocks = None
@@ -68,8 +71,9 @@ class SpecPager(ScrollView):
         if self._table_blocks is None:
             self._table_blocks = scan_table_blocks(lines)
 
+        self._update_gutter_cache()
         width = self.size.width if self.size.width > 0 else 200
-        _, gutter_total = self._gutter_width()
+        gutter_total = self._cached_gutter_total
         content_width = width - gutter_total if self.wrap_width > 0 else 0
 
         rows: list[tuple] = []
@@ -157,7 +161,7 @@ class SpecPager(ScrollView):
 
         row = self._visual_rows[virtual_y]
         lines = self.state.spec_lines
-        num_width, gutter_total = self._gutter_width()
+        num_width, gutter_total = self._cached_num_width, self._cached_gutter_total
         gutter_blank = " " * gutter_total
         width = self.size.width
         content_width = width - gutter_total
@@ -257,7 +261,7 @@ class SpecPager(ScrollView):
                 append_line_content(text, content, in_code, is_cursor)
             elif not in_code and not line.strip().startswith("```"):
                 stripped = line.lstrip()
-                heading_match = re.match(r"^(#{1,6})\s+", stripped)
+                heading_match = HEADING_RE.match(stripped)
                 if heading_match:
                     prefix_len = heading_match.end()
                     lead_spaces = len(line) - len(stripped)

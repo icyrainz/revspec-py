@@ -104,20 +104,28 @@ def _process_new_events(
 
     events, new_offset = read_events(jsonl_path, offset)
 
+    # Full event history — read once on first use, reused across code paths
+    _all_evts = None
+
+    def _all_events():
+        nonlocal _all_evts
+        if _all_evts is None:
+            _all_evts = read_events(jsonl_path, 0)
+        return _all_evts
+
     # Crash recovery
     if not events and check_recovery:
-        all_events, _ = read_events(jsonl_path, 0)
-        last_submit_idx = _find_last_index(all_events, lambda e: e.type == "submit")
+        all_evts, eof_offset = _all_events()
+        last_submit_idx = _find_last_index(all_evts, lambda e: e.type == "submit")
         if last_submit_idx >= 0:
-            last_submit_event = all_events[last_submit_idx]
+            last_submit_event = all_evts[last_submit_idx]
             if last_submit_event.ts == last_submit_ts:
                 return _ProcessResult(new_offset=offset)
-            after = all_events[last_submit_idx + 1:]
+            after = all_evts[last_submit_idx + 1:]
             has_new = any(e.type in ("comment", "reply", "approve", "session-end") for e in after)
             if not has_new:
-                all_events_2, eof_offset = read_events(jsonl_path, 0)
-                round_start = _find_current_round_start(all_events_2)
-                round_threads = replay_events_to_threads(all_events_2[round_start:])
+                round_start = _find_current_round_start(all_evts)
+                round_threads = replay_events_to_threads(all_evts[round_start:])
                 resolved = [t for t in round_threads if t.status == "resolved"]
                 output = _format_submit_output(resolved, spec_path)
                 _write_offset(offset_path, eof_offset, last_submit_event.ts)
@@ -135,9 +143,9 @@ def _process_new_events(
 
     submit_event = next((e for e in reversed(events) if e.type == "submit"), None)
     if submit_event:
-        all_events, _ = read_events(jsonl_path, 0)
-        round_start = _find_current_round_start(all_events)
-        round_threads = replay_events_to_threads(all_events[round_start:])
+        all_evts, _ = _all_events()
+        round_start = _find_current_round_start(all_evts)
+        round_threads = replay_events_to_threads(all_evts[round_start:])
         resolved = [t for t in round_threads if t.status == "resolved"]
         output = _format_submit_output(resolved, spec_path)
         _write_offset(offset_path, new_offset, submit_event.ts)
@@ -155,8 +163,8 @@ def _process_new_events(
     if not actionable:
         return _ProcessResult(new_offset=new_offset)
 
-    all_events, _ = read_events(jsonl_path, 0)
-    all_threads = replay_events_to_threads(all_events)
+    all_evts, _ = _all_events()
+    all_threads = replay_events_to_threads(all_evts)
     threads_by_id = {t.id: t for t in all_threads}
 
     output = _format_watch_output(actionable, threads_by_id, spec_lines, spec_path)
@@ -255,25 +263,36 @@ def _find_last_index(lst, pred):
 
 
 def _acquire_lock(lock_path):
-    if lock_path.exists():
+    for attempt in range(2):
         try:
-            locked_pid = int(lock_path.read_text().strip())
-            if locked_pid != os.getpid():
-                try:
-                    os.kill(locked_pid, 0)
-                    print(f"Error: Another revspec watch is running (PID {locked_pid})", file=sys.stderr)
-                    sys.exit(3)
-                except OSError:
-                    lock_path.unlink()  # Stale lock
-        except ValueError:
-            lock_path.unlink()
-    lock_path.write_text(str(os.getpid()))
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return
+        except FileExistsError:
+            if attempt > 0:
+                print("Error: Could not acquire lock", file=sys.stderr)
+                sys.exit(3)
+            # Check existing lock for staleness
+            try:
+                locked_pid = int(lock_path.read_text().strip())
+            except (ValueError, OSError):
+                lock_path.unlink(missing_ok=True)
+                continue  # retry
+            if locked_pid == os.getpid():
+                return  # We already hold it
+            try:
+                os.kill(locked_pid, 0)
+                print(f"Error: Another revspec watch is running (PID {locked_pid})", file=sys.stderr)
+                sys.exit(3)
+            except OSError:
+                lock_path.unlink(missing_ok=True)
+                continue  # stale lock, retry
 
 
 def _release_lock(lock_path):
     try:
-        if lock_path.exists() and lock_path.read_text().strip() == str(os.getpid()):
-            lock_path.unlink()
+        lock_path.unlink(missing_ok=True)
     except OSError:
         pass
 

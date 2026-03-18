@@ -273,6 +273,8 @@ class CommentScreen(ModalScreen[CommentResult]):
         elif key in ("i", "c"):
             self._enter_insert()
         elif key == "r":
+            if not self.existing_thread:
+                return
             if self._on_resolve:
                 was_resolved = self.existing_thread and self.existing_thread.status == "resolved"
                 self._on_resolve()

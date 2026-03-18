@@ -70,6 +70,8 @@ class SearchScreen(ModalScreen[tuple[str, int, int] | None]):
         return count
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        inp = self.query_one("#search-input", Input)
+        inp.styles.color = None
         query = event.value.strip()
         if not query:
             self.dismiss(None)

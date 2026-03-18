@@ -177,7 +177,21 @@ class RevspecApp(App):
             self._show_transient("Failed to reload spec", "warn", 2.0)
 
     def _check_live_events(self) -> None:
-        """Poll JSONL for owner events (AI replies)."""
+        """Poll JSONL for owner events (AI replies) and check spec mtime."""
+        # Spec mutation guard — check mtime on timer, not per-keypress
+        spec_missing = False
+        try:
+            current_mtime = Path(self.spec_file).stat().st_mtime
+            changed = current_mtime != self._spec_mtime
+        except OSError:
+            changed = True
+            spec_missing = True
+        if changed and not self._spec_mtime_changed:
+            self._spec_mtime_changed = True
+            self.query_one("#top-bar", Static).update(self._top_bar_text())
+            if spec_missing:
+                self._show_transient("Spec file is missing or inaccessible", "warn", 3.0)
+
         result = self._watcher_service.poll()
         if not result.has_new:
             return
@@ -244,15 +258,16 @@ class RevspecApp(App):
             has_active_message=self._message_timer is not None,
         )
 
-    def _refresh(self) -> None:
-        # Spec mutation guard
+    def _write_event(self, event: LiveEvent) -> bool:
+        """Write a JSONL event, showing a warning on failure. Returns True on success."""
         try:
-            current_mtime = Path(self.spec_file).stat().st_mtime
-            if current_mtime != self._spec_mtime:
-                self._spec_mtime_changed = True
+            append_event(self.jsonl_path, event)
+            return True
         except OSError:
-            pass
+            self._show_transient("Failed to save — check disk space/permissions", "warn", 3.0)
+            return False
 
+    def _refresh(self) -> None:
         if self.pager_widget:
             self.pager_widget.cursor_line = self.state.cursor_line
             if self.search_query:
@@ -382,7 +397,7 @@ class RevspecApp(App):
             self.query_one("#bottom-bar", Static).update(self._build_hints(hints))
         else:
             self.query_one("#bottom-bar", Static).update(Text(f" {key}...", Style(color=THEME["text_dim"])))
-        self._pending_key_timer = self.set_timer(0.3, self._clear_pending_hint)
+        self._pending_key_timer = self.set_timer(0.35, self._clear_pending_hint)
 
     def _handle_single_key(self, event: Key, key: str) -> None:
         """Process a single key press (non-sequence)."""
@@ -453,7 +468,7 @@ class RevspecApp(App):
                 else:
                     self.state.resolve_all_pending()
                     for t in pending_threads:
-                        append_event(self.jsonl_path, LiveEvent(
+                        self._write_event(LiveEvent(
                             type="resolve", thread_id=t.id,
                             author="reviewer", ts=int(time.time() * 1000),
                         ))
@@ -597,13 +612,13 @@ class RevspecApp(App):
             if thread:
                 self.state.reply_to_thread(thread.id, text)
                 self.state.mark_read(thread.id)
-                append_event(self.jsonl_path, LiveEvent(
+                self._write_event(LiveEvent(
                     type="reply", thread_id=thread.id,
                     author="reviewer", text=text, ts=int(time.time() * 1000),
                 ))
             else:
                 new_thread = self.state.add_comment(self.state.cursor_line, text)
-                append_event(self.jsonl_path, LiveEvent(
+                self._write_event(LiveEvent(
                     type="comment", thread_id=new_thread.id,
                     line=self.state.cursor_line, author="reviewer",
                     text=text, ts=int(time.time() * 1000),
@@ -619,7 +634,7 @@ class RevspecApp(App):
                 self.state.resolve_thread(thread.id)
                 self.state.mark_read(thread.id)
                 event_type = "unresolve" if was_resolved else "resolve"
-                append_event(self.jsonl_path, LiveEvent(
+                self._write_event(LiveEvent(
                     type=event_type, thread_id=thread.id,
                     author="reviewer", ts=int(time.time() * 1000),
                 ))
@@ -651,7 +666,7 @@ class RevspecApp(App):
             self.state.resolve_thread(thread_id)
             self.state.mark_read(thread_id)
             event_type = "unresolve" if was_resolved else "resolve"
-            append_event(self.jsonl_path, LiveEvent(
+            self._write_event(LiveEvent(
                 type=event_type, thread_id=thread_id, author="reviewer",
                 ts=int(time.time() * 1000),
             ))
@@ -679,7 +694,7 @@ class RevspecApp(App):
         self.state.resolve_thread(thread.id)
         self.state.mark_read(thread.id)
         event_type = "unresolve" if was_resolved else "resolve"
-        append_event(self.jsonl_path, LiveEvent(
+        self._write_event(LiveEvent(
             type=event_type, thread_id=thread.id,
             author="reviewer", ts=int(time.time() * 1000),
         ))
@@ -697,7 +712,7 @@ class RevspecApp(App):
         def on_result(confirmed: bool) -> None:
             if confirmed:
                 self.state.delete_thread(thread.id)
-                append_event(self.jsonl_path, LiveEvent(
+                self._write_event(LiveEvent(
                     type="delete", thread_id=thread.id,
                     author="reviewer", ts=int(time.time() * 1000),
                 ))
@@ -749,7 +764,8 @@ class RevspecApp(App):
                     msg = "Search wrapped to top" if direction == 1 else "Search wrapped to bottom"
                     self._show_transient(msg, "info", 1.2)
                 return
-        self._refresh()  # TS silently refreshes on no match
+        self._show_transient(f"Pattern not found: '{self.search_query}'", "warn")
+        self._refresh()
 
     def _is_watcher_running(self) -> bool:
         return is_watcher_running(self.spec_file)
@@ -763,7 +779,7 @@ class RevspecApp(App):
             return
 
         def do_submit() -> None:
-            append_event(self.jsonl_path, LiveEvent(
+            self._write_event(LiveEvent(
                 type="submit", author="reviewer", ts=int(time.time() * 1000),
             ))
             count = len(self.state.threads)
@@ -803,7 +819,7 @@ class RevspecApp(App):
                 if confirmed:
                     for t in self.state.threads:
                         if t.status not in ("resolved", "outdated"):
-                            append_event(self.jsonl_path, LiveEvent(
+                            self._write_event(LiveEvent(
                                 type="resolve", thread_id=t.id,
                                 author="reviewer", ts=int(time.time() * 1000),
                             ))
@@ -828,7 +844,7 @@ class RevspecApp(App):
                 if confirmed:
                     for t in self.state.threads:
                         if t.status not in ("resolved", "outdated"):
-                            append_event(self.jsonl_path, LiveEvent(
+                            self._write_event(LiveEvent(
                                 type="resolve", thread_id=t.id,
                                 author="reviewer", ts=int(time.time() * 1000),
                             ))
@@ -881,7 +897,7 @@ class RevspecApp(App):
             self._show_transient(f"Unknown command: {cmd}", "warn")
 
     def _exit_tui(self, event_type: str) -> None:
-        append_event(self.jsonl_path, LiveEvent(
+        self._write_event(LiveEvent(
             type=event_type, author="reviewer", ts=int(time.time() * 1000),
         ))
         # Clean up offset file if no watcher is running to handle it
