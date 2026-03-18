@@ -599,6 +599,7 @@ class RevspecApp(App):
             self._push_jump()
             self.state.cursor_line = line
             self._refresh()
+            self._scroll_to_cursor(center=True)
         else:
             self._show_transient(f"No h{level} headings")
 

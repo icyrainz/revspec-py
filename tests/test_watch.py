@@ -139,6 +139,58 @@ class TestWatchLock:
         run_watch(str(spec))  # Should not fail
 
 
+class TestWatchApproveWithComments:
+    """Tests for approve surfacing unprocessed comments."""
+
+    def test_approve_with_comments_surfaces_threads(self, tmp_path, capsys, monkeypatch):
+        """When approve arrives with unprocessed comments, output them."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "This needs work"},
+            {"type": "approve", "author": "reviewer", "ts": 2000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "This needs work" in captured.out
+        assert "approved" in captured.out.lower()
+        # Reply instructions should be suppressed on approve
+        assert "To reply:" not in captured.out
+        assert "When done replying" not in captured.out
+
+    def test_approve_without_comments_no_thread_output(self, tmp_path, capsys, monkeypatch):
+        """When approve arrives alone, only output 'Review approved.'"""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "approve", "author": "reviewer", "ts": 1000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert captured.out == "Review approved.\n"
+
+    def test_approve_with_reply_surfaces_thread(self, tmp_path, capsys, monkeypatch):
+        """Replies in the same batch as approve should be surfaced."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Original comment"},
+            {"type": "reply", "author": "reviewer", "ts": 2000,
+             "threadId": "t1", "text": "Follow-up"},
+            {"type": "approve", "author": "reviewer", "ts": 3000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "Original comment" in captured.out
+        assert "Follow-up" in captured.out
+        assert "approved" in captured.out.lower()
+
+
 class TestWatchCrashRecovery:
     def test_recovery_reprocesses_submit(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
@@ -158,3 +210,46 @@ class TestWatchCrashRecovery:
         run_watch(str(spec))
         captured = capsys.readouterr()
         assert "Rewrite Requested" in captured.out
+
+    def test_recovery_reprocesses_approve(self, tmp_path, capsys, monkeypatch):
+        """Crash recovery surfaces comments from a missed approve."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Needs improvement"},
+            {"type": "approve", "author": "reviewer", "ts": 2000},
+        ])
+        # Offset at EOF — simulates agent that read events but crashed before output
+        jsonl = tmp_path / "spec.review.jsonl"
+        offset_file = tmp_path / "spec.review.offset"
+        offset_file.write_text(str(jsonl.stat().st_size))
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "Needs improvement" in captured.out
+        assert "approved" in captured.out.lower()
+
+    def test_recovery_approve_only_surfaces_current_round(self, tmp_path, capsys, monkeypatch):
+        """Crash recovery should not surface comments from prior rounds."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            # Round 1 — already processed
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Old comment"},
+            {"type": "submit", "author": "reviewer", "ts": 2000},
+            # Round 2 — the current round
+            {"type": "comment", "author": "reviewer", "ts": 3000,
+             "threadId": "t2", "line": 3, "text": "New comment"},
+            {"type": "approve", "author": "reviewer", "ts": 4000},
+        ])
+        jsonl = tmp_path / "spec.review.jsonl"
+        offset_file = tmp_path / "spec.review.offset"
+        offset_file.write_text(str(jsonl.stat().st_size))
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "New comment" in captured.out
+        assert "Old comment" not in captured.out
+        assert "approved" in captured.out.lower()

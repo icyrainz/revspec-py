@@ -205,7 +205,8 @@ class CommentScreen(ModalScreen[CommentResult]):
         """Push a message into the conversation (for live watcher)."""
         history = self.query_one("#comment-history", VerticalScroll)
         history.mount(self._render_message(msg))
-        history.scroll_end(animate=False)
+        # Defer scroll so the mounted widget is in the DOM first
+        self.set_timer(0.05, lambda: history.scroll_end(animate=False))
 
     def _enter_insert(self) -> None:
         self._mode = "insert"

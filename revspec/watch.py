@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from .protocol import LiveEvent, read_events, replay_events_to_threads
+from .protocol import read_events, replay_events_to_threads
 
 
 def run_watch(spec_file: str) -> None:
@@ -41,7 +41,7 @@ def run_watch(spec_file: str) -> None:
                 spec_lines, offset, last_submit_ts, check_recovery=True,
             )
             if result.approved:
-                print("Review approved.")
+                sys.stdout.write(result.output)
                 _cleanup(lock_path, offset_path)
             elif result.session_ended:
                 sys.stdout.write(result.output)
@@ -60,7 +60,7 @@ def run_watch(spec_file: str) -> None:
             first_poll = False
 
             if result.approved:
-                print("Review approved.")
+                sys.stdout.write(result.output)
                 _cleanup(lock_path, offset_path)
                 return
 
@@ -116,6 +116,27 @@ def _process_new_events(
     # Crash recovery
     if not events and check_recovery:
         all_evts, eof_offset = _all_events()
+
+        # Recover missed approve
+        last_approve_idx = _find_last_index(all_evts, lambda e: e.type == "approve")
+        if last_approve_idx >= 0:
+            # Check no submit or session-end after the approve (would mean a new session)
+            after = all_evts[last_approve_idx + 1:]
+            has_newer = any(e.type in ("submit", "session-end", "comment") for e in after)
+            if not has_newer:
+                # Only surface events from after the last submit, not full history
+                last_submit_before = _find_last_index(
+                    all_evts[:last_approve_idx], lambda e: e.type == "submit"
+                )
+                round_start = last_submit_before + 1 if last_submit_before >= 0 else 0
+                round_events = all_evts[round_start:last_approve_idx]
+                output = _format_approve_output(
+                    round_events, spec_lines, spec_path,
+                )
+                _write_offset(offset_path, eof_offset, last_submit_ts)
+                return _ProcessResult(approved=True, output=output, new_offset=eof_offset)
+
+        # Recover missed submit
         last_submit_idx = _find_last_index(all_evts, lambda e: e.type == "submit")
         if last_submit_idx >= 0:
             last_submit_event = all_evts[last_submit_idx]
@@ -139,7 +160,9 @@ def _process_new_events(
 
     # Priority: approve > submit > session-end
     if any(e.type == "approve" for e in events):
-        return _ProcessResult(approved=True, new_offset=new_offset)
+        all_evts, _ = _all_events()
+        output = _format_approve_output(events, spec_lines, spec_path, all_events=all_evts)
+        return _ProcessResult(approved=True, output=output, new_offset=new_offset)
 
     submit_event = next((e for e in reversed(events) if e.type == "submit"), None)
     if submit_event:
@@ -171,7 +194,7 @@ def _process_new_events(
     return _ProcessResult(output=output, new_offset=new_offset)
 
 
-def _format_watch_output(events, threads_by_id, spec_lines, spec_path):
+def _format_watch_output(events, threads_by_id, spec_lines, spec_path, approved=False):
     new_ids, reply_ids = [], []
     seen = set()
     for e in events:
@@ -197,7 +220,8 @@ def _format_watch_output(events, threads_by_id, spec_lines, spec_path):
                 lines.extend(f"    {c}" for c in ctx)
             for msg in t.messages:
                 lines.append(f"  [{msg.author}]: {msg.text}")
-            lines.append(f"  To reply: revspec reply {spec_path} {tid} \"<your reply>\"")
+            if not approved:
+                lines.append(f"  To reply: revspec reply {spec_path} {tid} \"<your reply>\"")
             lines.append("")
 
     if reply_ids:
@@ -209,10 +233,11 @@ def _format_watch_output(events, threads_by_id, spec_lines, spec_path):
             lines.append(f"Thread: {tid} (line {t.line})")
             for msg in t.messages:
                 lines.append(f"  [{msg.author}]: {msg.text}")
-            lines.append(f"  To reply: revspec reply {spec_path} {tid} \"<your reply>\"")
+            if not approved:
+                lines.append(f"  To reply: revspec reply {spec_path} {tid} \"<your reply>\"")
             lines.append("")
 
-    if new_ids or reply_ids:
+    if not approved and (new_ids or reply_ids):
         lines.append(f"When done replying, run: revspec watch {spec_path}")
         lines.append("")
 
@@ -233,6 +258,23 @@ def _format_submit_output(resolved_threads, spec_path):
     lines.append(f"Rewrite the spec incorporating the above, then run: revspec watch {spec_path}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _format_approve_output(batch_events, spec_lines, spec_path, all_events=None):
+    """Format approve output, surfacing any unprocessed comments.
+
+    batch_events: events from the current offset (used to find actionable items).
+    all_events: full event history (used to replay threads). Falls back to batch_events.
+    """
+    actionable = [e for e in batch_events if e.type in ("comment", "reply") and e.author == "reviewer"]
+    output = ""
+    if actionable:
+        thread_source = all_events if all_events is not None else batch_events
+        all_threads = replay_events_to_threads(thread_source)
+        threads_by_id = {t.id: t for t in all_threads}
+        output = _format_watch_output(actionable, threads_by_id, spec_lines, spec_path, approved=True)
+    output += "Review approved.\n"
+    return output
 
 
 def _get_context(spec_lines, line_number, context_size):
