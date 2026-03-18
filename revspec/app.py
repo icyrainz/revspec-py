@@ -672,7 +672,7 @@ class RevspecApp(App):
             ))
             self._refresh()
 
-        screen = ThreadListScreen(self.state.threads, on_resolve=on_resolve)
+        screen = ThreadListScreen(self.state.threads, on_resolve=on_resolve, unread_ids=set(self.state._unread_thread_ids))
 
         def on_result(line: int | None) -> None:
             if line is not None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -114,8 +115,10 @@ def read_events(jsonl_path: str, offset: int = 0) -> tuple[list[LiveEvent], int]
             obj = json.loads(line)
             if is_valid_event(obj):
                 events.append(parse_event(obj))
-        except (json.JSONDecodeError, KeyError):
-            pass
+            else:
+                print(f"revspec: skipping invalid event: {line[:200]}", file=sys.stderr)
+        except (json.JSONDecodeError, KeyError) as exc:
+            print(f"revspec: malformed JSONL line: {line[:200]} ({exc})", file=sys.stderr)
     return events, file_size
 
 

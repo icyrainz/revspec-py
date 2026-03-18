@@ -192,13 +192,14 @@ class ThreadListScreen(ModalScreen[int | None]):
     }
     """
 
-    def __init__(self, threads: list[Thread], on_resolve=None, **kwargs):
+    def __init__(self, threads: list[Thread], on_resolve=None, unread_ids: set[str] | None = None, **kwargs):
         super().__init__(**kwargs)
         self._all_threads = [t for t in threads if t.status in ("open", "pending", "resolved")]
         self._filter_mode = "all"
         self.threads = self._filtered_sorted()
         self.selected_idx = 0
         self._on_resolve = on_resolve
+        self._unread_ids: set[str] = unread_ids or set()
 
     def _filtered_sorted(self) -> list[Thread]:
         if self._filter_mode == "active":
@@ -230,13 +231,39 @@ class ThreadListScreen(ModalScreen[int | None]):
 
     def _render_item(self, t: Thread) -> Text:
         icon = status_icon(t.status)
-        color = status_color(t.status)
+        is_unread = t.id in self._unread_ids
+        color = status_color(t.status, is_unread=is_unread)
         preview = self._preview_text(t)
         line_str = f"L{t.line}"
+        replies = len(t.messages) - 1
+        # Fixed-width reply/unread column (4 chars) so text always aligns
+        if replies > 0 and is_unread:
+            meta = f"{replies}*"
+        elif replies > 0:
+            meta = str(replies)
+        elif is_unread:
+            meta = "*"
+        else:
+            meta = ""
         text = Text()
         text.append(f" {icon} ", Style(color=color))
         text.append(f"{line_str:<5}", Style(color=THEME["text_dim"]))
-        text.append(f" {preview}", Style(color=THEME["text"]))
+        if meta:
+            # Split number and * for separate styling
+            if "*" in meta:
+                num_part = meta.replace("*", "")
+                if num_part:
+                    text.append(f" {num_part}", Style(color=THEME["text_dim"]))
+                    text.append("*", Style(color=THEME["yellow"], bold=True))
+                    text.append(" " * (4 - len(meta)), Style())
+                else:
+                    text.append(" *", Style(color=THEME["yellow"], bold=True))
+                    text.append("   ", Style())
+            else:
+                text.append(f" {meta:<4}", Style(color=THEME["text_dim"]))
+        else:
+            text.append("     ", Style())
+        text.append(preview, Style(color=THEME["text"]))
         return text
 
     def compose(self) -> ComposeResult:

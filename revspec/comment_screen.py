@@ -17,6 +17,7 @@ from rich.style import Style
 from .protocol import Thread, Message
 from .theme import THEME, status_icon
 from .hints import build_hints
+from .renderer import append_inline_styled
 
 
 def _render_hints(mode: str, resolved: bool = False) -> Text:
@@ -177,7 +178,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         if ts_str:
             text.append(f"  {ts_str}", Style(color=THEME["text_muted"]))
         text.append("\n")
-        text.append(msg.text, Style(color=THEME["text"]))
+        append_inline_styled(text, msg.text, Style(color=THEME["text"]))
         css_class = "msg-reviewer" if is_reviewer else "msg-ai"
         return Static(text, classes=css_class)
 
