@@ -25,7 +25,7 @@ The original revspec depends on Bun (via OpenTUI's bun:ffi bindings to Zig). Som
 ```
 revspec/
   cli.py              # Entry point, arg parsing, subcommand routing
-  app.py              # Main Textual App — ScrollView pager, overlays, key handling
+  app.py              # Main Textual App — layout, key handling, live watcher
   state.py            # ReviewState — cursor, threads, navigation
   protocol.py         # JSONL live event protocol (read/write/replay)
   theme.py            # Catppuccin Mocha color scheme
@@ -33,11 +33,19 @@ revspec/
   markdown.py         # Table parsing, rendering, word-wrap helpers
   watch.py            # CLI watch subcommand (AI event monitor)
   reply.py            # CLI reply subcommand (AI reply writer)
+  pager.py            # SpecPager ScrollView — Line API virtual scrolling
+  renderer.py         # Line rendering, inline markdown styling
+  overlays.py         # ThreadListScreen, SearchScreen, HelpScreen, etc.
+  navigation.py       # Heading/thread/unread jump logic
+  key_dispatch.py     # Two-key sequence registry and dispatch
+  hints.py            # Context-sensitive hint bar content
+  commands.py         # Command mode parsing (:q, :wrap, :{N}, etc.)
+  watcher_service.py  # LiveWatcherService — JSONL polling for AI replies
 ```
 
 ### Pager architecture
 
-`SpecPager` extends Textual's `ScrollView` using the Line API:
+`SpecPager` (in `pager.py`) extends Textual's `ScrollView` using the Line API:
 - `rebuild_visual_model()` builds a list of visual rows: `("spec", idx)`, `("spec_wrap", idx, seg)`, `("table_border", idx, pos)`
 - `render_line(y)` renders a single visual row on demand — Textual's compositor calls this for each visible screen line
 - `virtual_size` tells ScrollView the total content height
@@ -45,7 +53,7 @@ revspec/
 
 ### Key sequence registry
 
-All two-key sequences (e.g. `gg`, `]t`, `\w`) are defined in `_SEQUENCE_REGISTRY` — a single class-level list. Prefix keys, hint bar content, and dispatch are all derived automatically at init time. To add a new sequence, add one entry to the registry and one handler method.
+All two-key sequences (e.g. `gg`, `]t`, `\w`) are defined in `SEQUENCE_REGISTRY` (in `key_dispatch.py`) — a single module-level list. Prefix keys, hint bar content, and dispatch are all derived automatically at init time. To add a new sequence, add one entry to the registry and one handler method.
 
 ## JSONL Protocol
 
@@ -84,7 +92,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - Markdown-aware table rendering with box-drawing characters
 - Code-block-aware rendering with precomputed state map
 - Line wrapping (\w or :wrap toggle with continuation rows in visual model)
-- Watch CLI subcommand with crash recovery, JSONL truncation guard, lock management
+- Watch CLI subcommand with crash recovery (submit + approve), JSONL truncation guard, lock management
 - Reply CLI subcommand with thread validation, shell escape cleanup
 - All overlay screens use event.stop() to prevent key leaking to main app
 - Welcome hint on first launch (8s)
@@ -92,15 +100,21 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 ### Python-only improvements (to port back to Bun version)
 - **Comment popup stays in insert mode after Tab submit** — chat-like flow; only Escape returns to normal mode
 - **Comment popup resolve visual feedback** — border color changes on resolve (green=resolved, blue=open, mauve=insert), title shows `[OPEN]`/`[RESOLVED]`, hint bar shows `[r] reopen` vs `[r] resolve`
+- **Inline markdown in AI messages** — bold, italic, code, links rendered in comment popup via `append_inline_styled()`
+- **Thread list unread + reply count** — reply count `(N)` and unread marker `*` in thread list
 - **Ctrl+R to reload spec** — manual reload when spec modified externally. Top bar shows `"!! Spec changed externally (Ctrl+R to reload)"`
 - **Toggle keybindings** — `\w` toggles line wrap, `\n` toggles line numbers
 - **Command aliases** — `:submit`, `:approve`, `:help`, `:resolve`, `:reload`
 - **Watcher detection on submit** — S checks for `.review.lock` before submitting. Warns if no watcher is active
+- **Approve surfaces unprocessed comments** — when the AI agent wasn't running during the review, approve outputs all unseen comments before "Review approved." so the agent has full context
+- **Approve crash recovery** — if the watcher missed an approve event (crash/restart), it recovers and surfaces current-round comments
 - **Session-end cleanup** — watch process cleans up lock + offset files on session-end (not just approve). TUI cleans up offset file on exit when no watcher is running
 - **Pending key hint bar** — shows available options instead of `...` (e.g. pressing `]` shows `[]t] thread  []r] unread  []1] h1  []2] h2  []3] h3`)
+- **JSONL malformed line logging** — invalid/corrupt JSONL lines logged to stderr instead of silently swallowed
+- **Offline-first workflow** — TUI works fully without the AI agent; all comments persist to JSONL and are picked up when the agent starts later
 
 ### Tests
-206 total (state, protocol, markdown, watch, reply, bugfixes)
+378 total (state, protocol, markdown, watch, reply, watcher_service, commands, hints, key_dispatch, navigation, renderer, bugfixes, app_smoke)
 
 ### Known issues / remaining work
 - **Inline markdown in table cells** — table cell contents are rendered as plain text; `parse_inline_markdown()` is not applied inside `render_table_row()`
@@ -206,23 +220,19 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 
 | Feature | TypeScript source | Python module |
 |---------|-------------------|---------------|
-| Main TUI + keybindings | `src/tui/app.ts` | `revspec/app.py` |
-| Review state | `src/state/review-state.ts` | `revspec/state.py` |
-| JSONL protocol | `src/protocol/live-events.ts` | `revspec/protocol.py` |
-| Protocol types | `src/protocol/types.ts` | `revspec/protocol.py` |
-| Theme/colors | `src/tui/ui/theme.ts` | `revspec/theme.py` |
-| Pager rendering | `src/tui/pager.ts` | `revspec/app.py` (SpecPager ScrollView) |
+| Main TUI + layout | `src/tui/app.ts` | `revspec/app.py` |
+| Pager rendering | `src/tui/pager.ts` | `revspec/pager.py` |
+| Line rendering | `src/tui/ui/markdown.ts` | `revspec/renderer.py` + `revspec/markdown.py` |
+| Overlays (thread list, search, help, confirm, spinner) | `src/tui/thread-list.ts`, `search.ts`, `help.ts`, `confirm.ts`, `spinner.ts` | `revspec/overlays.py` |
 | Comment input | `src/tui/comment-input.ts` | `revspec/comment_screen.py` |
-| Search overlay | `src/tui/search.ts` | `revspec/app.py` (SearchScreen class) |
-| Thread list | `src/tui/thread-list.ts` | `revspec/app.py` (ThreadListScreen class) |
-| Confirm dialog | `src/tui/confirm.ts` | `revspec/app.py` (ConfirmScreen class) |
-| Help screen | `src/tui/help.ts` | `revspec/app.py` (HelpScreen class) |
-| Spinner | `src/tui/spinner.ts` | `revspec/app.py` (SpinnerScreen class) |
-| Status bars | `src/tui/status-bar.ts` | `revspec/app.py` (top/bottom bar methods) |
-| Keybind registry | `src/tui/ui/keybinds.ts` | `revspec/app.py` (_SEQUENCE_REGISTRY) |
-| Markdown rendering | `src/tui/ui/markdown.ts` | `revspec/markdown.py` + `app.py` (_line_style) |
-| Hint bar | `src/tui/ui/hint-bar.ts` | `revspec/app.py` (inline) |
-| Live watcher | `src/tui/live-watcher.ts` | `revspec/app.py` (_check_live_events) |
+| Review state | `src/state/review-state.ts` | `revspec/state.py` |
+| Navigation (headings, threads) | `src/tui/app.ts` | `revspec/navigation.py` |
+| Key dispatch | `src/tui/ui/keybinds.ts` | `revspec/key_dispatch.py` |
+| Hint bar | `src/tui/ui/hint-bar.ts` | `revspec/hints.py` |
+| Command mode | `src/tui/app.ts` | `revspec/commands.py` |
+| JSONL protocol | `src/protocol/live-events.ts`, `types.ts` | `revspec/protocol.py` |
+| Theme/colors | `src/tui/ui/theme.ts` | `revspec/theme.py` |
+| Live watcher | `src/tui/live-watcher.ts` | `revspec/watcher_service.py` |
 | CLI watch | `src/cli/watch.ts` | `revspec/watch.py` |
 | CLI reply | `src/cli/reply.ts` | `revspec/reply.py` |
 | CLI entry | `bin/revspec.ts` | `revspec/cli.py` |
