@@ -23,10 +23,10 @@ build:
   rm -rf dist/
   uv run python -m build
 
-# Publish to PyPI (builds first), then update local install
+# Publish to PyPI (builds first), then update global editable install
 publish: build
   uv run python -m twine upload dist/*
-  uv pip install -e . --no-build-isolation
+  pipx install -e . --force
 
 # Show what would be published
 check:
