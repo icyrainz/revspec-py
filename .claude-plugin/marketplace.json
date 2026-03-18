@@ -1,0 +1,17 @@
+{
+  "name": "revspec",
+  "owner": {
+    "name": "icyrainz"
+  },
+  "plugins": [
+    {
+      "name": "revspec",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/icyrainz/revspec-py.git"
+      },
+      "description": "Live spec review with real-time AI feedback",
+      "version": "0.3.0"
+    }
+  ]
+}
