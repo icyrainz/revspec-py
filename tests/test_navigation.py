@@ -1,6 +1,6 @@
 """Tests for navigation.py — JumpList and heading_breadcrumb."""
 
-from revspec.navigation import JumpList, heading_breadcrumb
+from revspec.navigation import JumpList, HeadingIndex, heading_breadcrumb
 
 
 # --- JumpList ---
@@ -164,3 +164,49 @@ class TestHeadingBreadcrumb:
     def test_strips_whitespace(self):
         lines = ["#  Title  with  spaces  ", "text"]
         assert heading_breadcrumb(lines, 2) == "Title  with  spaces"
+
+
+# --- HeadingIndex ---
+
+class TestHeadingIndex:
+    def test_breadcrumb(self):
+        lines = ["# Title", "text", "## Section", "text"]
+        idx = HeadingIndex(lines)
+        assert idx.breadcrumb(2) == "Title"
+        assert idx.breadcrumb(4) == "Section"
+
+    def test_breadcrumb_none(self):
+        idx = HeadingIndex(["text", "more text"])
+        assert idx.breadcrumb(1) is None
+
+    def test_next_heading(self):
+        lines = ["# H1", "text", "## H2", "text", "## H2b"]
+        idx = HeadingIndex(lines)
+        assert idx.next_heading(2, 1) == 3  # first ## after line 1
+        assert idx.next_heading(2, 3) == 5  # second ## after line 3
+
+    def test_next_heading_wraps(self):
+        lines = ["## First", "text", "## Second"]
+        idx = HeadingIndex(lines)
+        assert idx.next_heading(2, 3) == 1  # wraps to first
+
+    def test_prev_heading(self):
+        lines = ["# H1", "text", "## H2", "text", "## H2b"]
+        idx = HeadingIndex(lines)
+        assert idx.prev_heading(2, 5) == 3
+
+    def test_prev_heading_wraps(self):
+        lines = ["## First", "text", "## Second"]
+        idx = HeadingIndex(lines)
+        assert idx.prev_heading(2, 1) == 3  # wraps to last
+
+    def test_no_heading_returns_none(self):
+        idx = HeadingIndex(["text", "more text"])
+        assert idx.next_heading(1, 1) is None
+        assert idx.prev_heading(1, 1) is None
+
+    def test_rebuild(self):
+        idx = HeadingIndex(["text"])
+        assert idx.breadcrumb(1) is None
+        idx.rebuild(["# New Title", "text"])
+        assert idx.breadcrumb(2) == "New Title"

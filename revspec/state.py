@@ -20,6 +20,7 @@ class ReviewState:
         self.threads: list[Thread] = threads or []
         self.cursor_line: int = 1
         self._unread_thread_ids: set[str] = set()
+        self._thread_by_id: dict[str, Thread] = {t.id: t for t in self.threads}
 
     @property
     def line_count(self) -> int:
@@ -37,6 +38,7 @@ class ReviewState:
             messages=[Message(author="reviewer", text=text, ts=int(time.time() * 1000))],
         )
         self.threads.append(thread)
+        self._thread_by_id[thread.id] = thread
         return thread
 
     def reply_to_thread(self, thread_id: str, text: str) -> None:
@@ -85,6 +87,7 @@ class ReviewState:
 
     def delete_thread(self, thread_id: str) -> None:
         self.threads = [t for t in self.threads if t.id != thread_id]
+        self._thread_by_id.pop(thread_id, None)
         self._unread_thread_ids.discard(thread_id)
 
     def thread_at_line(self, line: int) -> Thread | None:
@@ -164,6 +167,7 @@ class ReviewState:
         self.threads = []
         self.cursor_line = 1
         self._unread_thread_ids.clear()
+        self._thread_by_id.clear()
 
     def delete_last_draft_message(self, thread_id: str) -> None:
         """Remove the last reviewer message from a thread. If thread is empty after, delete it."""
@@ -176,9 +180,7 @@ class ReviewState:
                 break
         if not t.messages:
             self.threads = [th for th in self.threads if th.id != thread_id]
+            self._thread_by_id.pop(thread_id, None)
 
     def _find_thread(self, thread_id: str) -> Thread | None:
-        for t in self.threads:
-            if t.id == thread_id:
-                return t
-        return None
+        return self._thread_by_id.get(thread_id)

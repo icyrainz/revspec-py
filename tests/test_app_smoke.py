@@ -61,6 +61,27 @@ class TestAppLaunch:
             await pilot.press("ctrl+c")
 
     @pytest.mark.asyncio
+    async def test_count_prefix_j(self, spec_dir):
+        _, spec_path = spec_dir
+        app = RevspecApp(spec_path)
+        async with app.run_test() as pilot:
+            assert app.state.cursor_line == 1
+            await pilot.press("5")
+            await pilot.press("j")
+            assert app.state.cursor_line == 6
+            await pilot.press("ctrl+c")
+
+    @pytest.mark.asyncio
+    async def test_count_prefix_G(self, spec_dir):
+        _, spec_path = spec_dir
+        app = RevspecApp(spec_path)
+        async with app.run_test() as pilot:
+            await pilot.press("3")
+            await pilot.press("G")
+            assert app.state.cursor_line == 3
+            await pilot.press("ctrl+c")
+
+    @pytest.mark.asyncio
     async def test_gg_goes_to_top(self, spec_dir):
         _, spec_path = spec_dir
         app = RevspecApp(spec_path)

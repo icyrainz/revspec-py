@@ -31,9 +31,9 @@ _INLINE_STYLES: dict[int, dict] = {
     3: {"italic": True},                          # *italic*
     4: {"bold": True},                            # __bold__
     5: {"italic": True},                          # _italic_
-    6: {"color": "#6c7086", "strike": True},      # ~~strikethrough~~
-    7: {"color": "#89b4fa", "underline": True},   # [link text](url)
-    8: {"color": "#cba6f7"},                       # `code`
+    6: {"color": THEME["text_dim"], "strike": True},     # ~~strikethrough~~
+    7: {"color": THEME["blue"], "underline": True},      # [link text](url)
+    8: {"color": THEME["mauve"]},                         # `code`
 }
 
 

@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.style import Style
 
 from .protocol import Thread
-from .theme import THEME, STATUS_ICONS
+from .theme import THEME, status_icon, status_color
 from .hints import build_hints
 
 
@@ -22,7 +22,7 @@ from .hints import build_hints
 # Search modal
 # ---------------------------------------------------------------------------
 
-class SearchScreen(ModalScreen[tuple[str, int] | None]):
+class SearchScreen(ModalScreen[tuple[str, int, int] | None]):
     """Bottom-bar search input."""
 
     CSS = """
@@ -59,6 +59,16 @@ class SearchScreen(ModalScreen[tuple[str, int] | None]):
             raw = event.value.strip()
             self._on_preview(raw if len(raw) >= 3 else None)
 
+    def _count_matches(self, query: str) -> int:
+        case_sensitive = query != query.lower()
+        q = query if case_sensitive else query.lower()
+        count = 0
+        for line in self.spec_lines:
+            hay = line if case_sensitive else line.lower()
+            if q in hay:
+                count += 1
+        return count
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
         if not query:
@@ -66,11 +76,11 @@ class SearchScreen(ModalScreen[tuple[str, int] | None]):
             return
         match = self._find_match(query, self.start_line, 1)
         if match is not None:
-            self.dismiss((query, match))
+            total = self._count_matches(query)
+            self.dismiss((query, match, total))
         else:
             inp = self.query_one("#search-input", Input)
-            inp.value = ""
-            inp.placeholder = "No match"
+            inp.placeholder = f"No match for '{query}'"
             inp.styles.color = THEME["red"]
 
     def on_key(self, event: Key) -> None:
@@ -207,8 +217,6 @@ class ThreadListScreen(ModalScreen[int | None]):
         raw = t.messages[0].text.replace("\n", " ") if t.messages else ""
         return (raw[:49] + "\u2026") if len(raw) > 50 else raw
 
-    STATUS_COLORS = {"open": THEME["text"], "pending": THEME["yellow"], "resolved": THEME["green"]}
-
     def _hints_text(self) -> Text:
         return build_hints([
             ("j/k", "navigate"),
@@ -219,8 +227,8 @@ class ThreadListScreen(ModalScreen[int | None]):
         ])
 
     def _render_item(self, t: Thread) -> Text:
-        icon = STATUS_ICONS.get(t.status, " ")
-        color = self.STATUS_COLORS.get(t.status, THEME["text_dim"])
+        icon = status_icon(t.status)
+        color = status_color(t.status)
         preview = self._preview_text(t)
         line_str = f"L{t.line}"
         text = Text()
@@ -331,10 +339,11 @@ class HelpScreen(ModalScreen[None]):
             ver = pkg_version("revspec")
         except Exception:
             ver = "dev"
+        blue = THEME["blue"]
         help_text = f"""\
-[bold #89b4fa]revspec v{ver}[/]
+[bold {blue}]revspec v{ver}[/]
 
-[bold #89b4fa]Keyboard Reference[/]
+[bold {blue}]Keyboard Reference[/]
 
 [bold]Quick Start[/]
   Navigate to a line and press c to comment.

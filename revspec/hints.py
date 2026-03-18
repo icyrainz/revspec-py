@@ -6,7 +6,6 @@ from rich.text import Text
 from rich.style import Style
 
 from .theme import THEME
-from .navigation import heading_breadcrumb
 from .protocol import Thread
 
 
@@ -46,7 +45,7 @@ def build_top_bar(
     unread_count: int,
     cursor_line: int,
     line_count: int,
-    spec_lines: list[str],
+    breadcrumb: str | None = None,
     mtime_changed: bool,
 ) -> Text:
     """Build the top status bar text."""
@@ -90,10 +89,9 @@ def build_top_bar(
     text.append(f"L{cur}/{total} {pos_label}", Style(color=THEME["text_muted"]))
 
     # Section breadcrumb
-    crumb = heading_breadcrumb(spec_lines, cur)
-    if crumb:
+    if breadcrumb:
         text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
-        text.append(crumb, Style(color=THEME["text_dim"], italic=True))
+        text.append(breadcrumb, Style(color=THEME["text_dim"], italic=True))
 
     return text
 

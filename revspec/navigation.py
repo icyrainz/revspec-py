@@ -64,6 +64,56 @@ class JumpList:
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)")
 
 
+class HeadingIndex:
+    """Precomputed heading positions for O(1) breadcrumb and O(log n) navigation."""
+
+    def __init__(self, spec_lines: list[str] | None = None) -> None:
+        # List of (line_number_1based, level, text) sorted by line
+        self._headings: list[tuple[int, int, str]] = []
+        if spec_lines:
+            self.rebuild(spec_lines)
+
+    def rebuild(self, spec_lines: list[str]) -> None:
+        self._headings = []
+        for i, line in enumerate(spec_lines):
+            m = _HEADING_RE.match(line)
+            if m:
+                level = len(m.group(1))
+                self._headings.append((i + 1, level, m.group(2).strip()))
+
+    def breadcrumb(self, cursor_line: int) -> str | None:
+        """Find nearest heading at or above cursor_line."""
+        result = None
+        for line_num, _level, text in self._headings:
+            if line_num <= cursor_line:
+                result = text
+            else:
+                break
+        return result
+
+    def next_heading(self, level: int, cursor_line: int) -> int | None:
+        """Find next heading of given level after cursor. Wraps around."""
+        for line_num, hlevel, _text in self._headings:
+            if line_num > cursor_line and hlevel == level:
+                return line_num
+        # Wrap around
+        for line_num, hlevel, _text in self._headings:
+            if hlevel == level:
+                return line_num
+        return None
+
+    def prev_heading(self, level: int, cursor_line: int) -> int | None:
+        """Find previous heading of given level before cursor. Wraps around."""
+        for line_num, hlevel, _text in reversed(self._headings):
+            if line_num < cursor_line and hlevel == level:
+                return line_num
+        # Wrap around
+        for line_num, hlevel, _text in reversed(self._headings):
+            if hlevel == level:
+                return line_num
+        return None
+
+
 def heading_breadcrumb(spec_lines: list[str], cursor_line: int) -> str | None:
     """Find the nearest heading above cursor_line (1-based). Returns heading text or None."""
     for i in range(cursor_line - 1, -1, -1):

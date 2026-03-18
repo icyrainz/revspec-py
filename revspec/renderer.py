@@ -125,7 +125,7 @@ def append_highlighted(
             text.append(content[pos:idx], base_style)
         text.append(
             content[idx:idx + len(query)],
-            Style(color="#1e1e2e", bgcolor=THEME["yellow"], bold=True),
+            Style(color=THEME["crust"], bgcolor=THEME["yellow"], bold=True),
         )
         pos = idx + len(query)
 

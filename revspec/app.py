@@ -19,7 +19,7 @@ from .theme import THEME
 from .commands import parse_command
 from .hints import build_hints, build_top_bar, build_bottom_bar
 from .key_dispatch import SequenceRouter
-from .navigation import JumpList
+from .navigation import JumpList, HeadingIndex
 from .pager import SpecPager
 from .overlays import (
     SearchScreen, ConfirmScreen, ThreadListScreen,
@@ -74,9 +74,10 @@ class RevspecApp(App):
         if os.path.exists(self.jsonl_path):
             events, _ = read_events(self.jsonl_path)
             for t in replay_events_to_threads(events):
-                existing = next((et for et in self.state.threads if et.id == t.id), None)
+                existing = self.state._find_thread(t.id)
                 if not existing:
                     self.state.threads.append(t)
+                    self.state._thread_by_id[t.id] = t
                 else:
                     existing.messages = t.messages
                     existing.status = t.status
@@ -86,9 +87,13 @@ class RevspecApp(App):
         self._pending_timer: float = 0
         self._pending_key_timer: object | None = None
         self._seq_router = SequenceRouter()
+        self._count_prefix: int = 0  # numeric prefix for motions (5j, 3G)
 
         # Jump list — mirrors vim :jumps (TS app.ts:161-184)
         self._jump_list = JumpList()
+
+        # Precomputed heading index
+        self._heading_index = HeadingIndex(spec_lines)
 
         # Transient message timer handle
         self._message_timer = None
@@ -130,10 +135,12 @@ class RevspecApp(App):
             events, _ = read_events(self.jsonl_path)
             for t in replay_events_to_threads(events):
                 self.state.threads.append(t)
+                self.state._thread_by_id[t.id] = t
         self._spec_mtime = new_mtime
         self._spec_mtime_changed = False
         self.search_query = None
         self._jump_list = JumpList()
+        self._heading_index.rebuild(new_content.split("\n"))
         if self.pager_widget:
             self.pager_widget.invalidate_table_cache()
         self._watcher_service.init_offset()
@@ -221,7 +228,7 @@ class RevspecApp(App):
             unread_count=self.state.unread_count,
             cursor_line=self.state.cursor_line,
             line_count=self.state.line_count,
-            spec_lines=self.state.spec_lines,
+            breadcrumb=self._heading_index.breadcrumb(self.state.cursor_line),
             mtime_changed=self._spec_mtime_changed,
         )
 
@@ -330,18 +337,26 @@ class RevspecApp(App):
 
         key = event.key
 
+        # Accumulate digit prefix (e.g. 5j = move 5 lines)
+        if key.isdigit() and not self._pending_key:
+            digit = int(key)
+            # Don't treat 0 as count start (0 could be a motion later)
+            if self._count_prefix > 0 or digit > 0:
+                event.prevent_default()
+                self._count_prefix = self._count_prefix * 10 + digit
+                return
+
         # Check for second key of a sequence
         pending = self._check_pending()
 
         if pending:
             event.prevent_default()
-            seq = pending + key
             handler_name = self._seq_router.resolve(pending, key)
             if handler_name:
                 getattr(self, handler_name)()
             else:
-                # Sequence didn't match — re-process second key as standalone
                 self._handle_single_key(event, key)
+            self._count_prefix = 0
             return
 
         # Single keys that start sequences
@@ -353,9 +368,11 @@ class RevspecApp(App):
         # Single-key actions
         event.prevent_default()
         self._handle_single_key(event, key)
+        self._count_prefix = 0
 
     def _start_pending(self, key: str) -> None:
         """Start a pending multi-key sequence."""
+        self._count_prefix = 0
         self._cancel_pending_hint_timer()
         self._pending_key = key
         self._pending_timer = time.monotonic()
@@ -374,28 +391,34 @@ class RevspecApp(App):
             self._start_pending(key)
             return
 
+        count = max(1, self._count_prefix)
         match key:
             case "j" | "down":
-                if self.state.cursor_line < self.state.line_count:
-                    self.state.cursor_line += 1
+                new_line = min(self.state.cursor_line + count, self.state.line_count)
+                if new_line != self.state.cursor_line:
+                    self.state.cursor_line = new_line
                     self._refresh()
             case "k" | "up":
-                if self.state.cursor_line > 1:
-                    self.state.cursor_line -= 1
+                new_line = max(self.state.cursor_line - count, 1)
+                if new_line != self.state.cursor_line:
+                    self.state.cursor_line = new_line
                     self._refresh()
             case "ctrl+d":
                 view_h = self.pager_widget.size.height if self.pager_widget else self.size.height - 2
-                half = max(1, view_h // 2)
+                half = max(1, view_h // 2) * count
                 self.state.cursor_line = min(self.state.cursor_line + half, self.state.line_count)
                 self._refresh()
             case "ctrl+u":
                 view_h = self.pager_widget.size.height if self.pager_widget else self.size.height - 2
-                half = max(1, view_h // 2)
+                half = max(1, view_h // 2) * count
                 self.state.cursor_line = max(self.state.cursor_line - half, 1)
                 self._refresh()
             case "shift+g" | "G":
                 self._push_jump()
-                self.state.cursor_line = self.state.line_count
+                if self._count_prefix > 0:
+                    self.state.cursor_line = min(self._count_prefix, self.state.line_count)
+                else:
+                    self.state.cursor_line = self.state.line_count
                 self._refresh()
             case "ctrl+o":
                 self._jump_backward()
@@ -554,7 +577,9 @@ class RevspecApp(App):
         self._show_transient(f"Line numbers {'on' if show else 'off'}", "info")
 
     def _jump_heading(self, level: int, forward: bool) -> None:
-        line = self.state.next_heading(level) if forward else self.state.prev_heading(level)
+        line = (self._heading_index.next_heading(level, self.state.cursor_line)
+                if forward else
+                self._heading_index.prev_heading(level, self.state.cursor_line))
         if line:
             self._push_jump()
             self.state.cursor_line = line
@@ -601,9 +626,13 @@ class RevspecApp(App):
                 screen.update_status(thread.status)
             self._refresh()
 
+        # Get spec line text for context preview
+        idx = self.state.cursor_line - 1
+        spec_line_text = self.state.spec_lines[idx] if 0 <= idx < len(self.state.spec_lines) else ""
         screen = CommentScreen(
             self.state.cursor_line, thread,
             on_submit=on_submit, on_resolve=on_resolve,
+            spec_line_text=spec_line_text,
         )
 
         def on_result(result: CommentResult) -> None:
@@ -634,7 +663,10 @@ class RevspecApp(App):
             if line is not None:
                 self._push_jump()
                 self.state.cursor_line = line
-            self._refresh()
+                self._refresh()
+                self._open_comment()
+            else:
+                self._refresh()
 
         self.push_screen(screen, on_result)
 
@@ -683,12 +715,13 @@ class RevspecApp(App):
             self.state.spec_lines, self.state.cursor_line, on_preview=on_preview,
         )
 
-        def on_result(result: tuple[str, int] | None) -> None:
+        def on_result(result: tuple[str, int, int] | None) -> None:
             if result:
-                query, line = result
+                query, line, total = result
                 self.search_query = query
                 self._push_jump()
                 self.state.cursor_line = line
+                self._show_transient(f"/{query}  [1 of {total}]", "info")
             else:
                 self.search_query = None
             self._refresh()

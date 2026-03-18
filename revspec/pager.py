@@ -13,7 +13,7 @@ from rich.style import Style
 from rich.console import Console
 
 from .state import ReviewState
-from .theme import THEME
+from .theme import THEME, status_icon, status_color
 from .renderer import (
     line_style, is_block_element, append_line_content,
     append_inline_styled, append_highlighted, gutter_width,
@@ -219,13 +219,8 @@ class SpecPager(ScrollView):
 
         # Gutter indicator
         if thread:
-            if self.state.is_unread(thread.id):
-                gutter_style = Style(color=THEME["yellow"], bgcolor=cursor_bg)
-            elif thread.status == "resolved":
-                gutter_style = Style(color=THEME["green"], bgcolor=cursor_bg)
-            else:
-                gutter_style = Style(color=THEME["text"], bgcolor=cursor_bg)
-            text.append("\u2588", gutter_style)
+            color = status_color(thread.status, self.state.is_unread(thread.id))
+            text.append(status_icon(thread.status), Style(color=color, bgcolor=cursor_bg))
         else:
             text.append(" ", Style(bgcolor=cursor_bg))
 

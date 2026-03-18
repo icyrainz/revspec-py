@@ -15,34 +15,30 @@ from rich.text import Text
 from rich.style import Style
 
 from .protocol import Thread, Message
-from .theme import THEME
+from .theme import THEME, status_icon
 from .hints import build_hints
 
 
 def _render_hints(mode: str, resolved: bool = False) -> Text:
-    """Render hint bar with colored mode label and key brackets."""
+    """Render hint bar — mode label is now in the border title, not here."""
     if mode == "normal":
         resolve_label = "reopen" if resolved else "resolve"
         return build_hints(
             [("i/c", "reply"), ("r", resolve_label), ("q/Esc", "close")],
-            prefix="[NORMAL]",
-            prefix_style=Style(color=THEME["blue"], bold=True),
         )
     else:
         return build_hints(
             [("Tab", "send"), ("Esc", "normal")],
-            prefix="[INSERT]",
-            prefix_style=Style(color=THEME["mauve"], bold=True),
         )
 
 
 # Custom TextArea theme to blend with dialog panel background
 _COMMENT_THEME = TextAreaTheme(
     name="revspec-comment",
-    base_style=Style(color="#cdd6f4", bgcolor="#313244"),
-    cursor_style=Style(color="#1e1e2e", bgcolor="#cdd6f4"),
-    cursor_line_style=Style(bgcolor="#313244"),
-    gutter_style=Style(color="#313244", bgcolor="#313244"),
+    base_style=Style(color=THEME["text"], bgcolor=THEME["panel"]),
+    cursor_style=Style(color=THEME["crust"], bgcolor=THEME["text"]),
+    cursor_line_style=Style(bgcolor=THEME["panel"]),
+    gutter_style=Style(color=THEME["panel"], bgcolor=THEME["panel"]),
 )
 
 
@@ -98,6 +94,11 @@ class CommentScreen(ModalScreen[CommentResult]):
         min-height: 4;
         border: none;
     }
+    #comment-context {
+        height: 1;
+        color: #6c7086;
+        margin-bottom: 1;
+    }
     #comment-hints {
         height: 1;
     }
@@ -109,6 +110,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         existing_thread: Thread | None = None,
         on_submit: Callable[[str], None] | None = None,
         on_resolve: Callable[[], None] | None = None,
+        spec_line_text: str = "",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -116,12 +118,17 @@ class CommentScreen(ModalScreen[CommentResult]):
         self.existing_thread = existing_thread
         self._on_submit = on_submit
         self._on_resolve = on_resolve
+        self._spec_line_text = spec_line_text
         self._mode: str = "normal" if existing_thread and existing_thread.messages else "insert"
         self._pending_g: bool = False
 
     def compose(self) -> ComposeResult:
         thread = self.existing_thread
+        # Context line preview
+        ctx = self._spec_line_text.strip()
+        ctx_display = f" L{self.line}: {ctx[:70]}{'…' if len(ctx) > 70 else ''}" if ctx else f" L{self.line}"
         with Vertical(id="comment-dialog"):
+            yield Static(ctx_display, id="comment-context")
             with VerticalScroll(id="comment-history"):
                 if thread:
                     for msg in thread.messages:
@@ -130,16 +137,18 @@ class CommentScreen(ModalScreen[CommentResult]):
             yield TextArea(id="comment-input", placeholder="Type your comment...")
             yield Static(_render_hints(self._mode), id="comment-hints")
 
-    def on_mount(self) -> None:
-        # Set border title
+    def _build_title(self) -> str:
         thread = self.existing_thread
+        mode_label = self._mode.upper()
         if thread and thread.id:
-            status_label = thread.status.upper() if thread.status else "OPEN"
-            title = f" Thread #{thread.id} (line {self.line}) [{status_label}] "
+            icon = status_icon(thread.status)
+            return f" \\[{mode_label}] {icon} Thread #{thread.id} "
         else:
-            title = f" New comment on line {self.line} "
+            return f" \\[{mode_label}] New comment on line {self.line} "
+
+    def on_mount(self) -> None:
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.border_title = title
+        dialog.border_title = self._build_title()
         # Set initial mode
         if self._mode == "insert":
             self.query_one("#comment-input", TextArea).focus()
@@ -172,22 +181,20 @@ class CommentScreen(ModalScreen[CommentResult]):
         css_class = "msg-reviewer" if is_reviewer else "msg-ai"
         return Static(text, classes=css_class)
 
-    def update_title(self, thread_id: str, line: int) -> None:
-        """Update dialog title after new thread creation."""
+    def update_title(self, thread_id: str = "", line: int = 0) -> None:
+        """Update dialog title (e.g. after new thread creation)."""
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.border_title = f" Thread #{thread_id} (line {line}) [OPEN] "
+        dialog.border_title = self._build_title()
 
     def update_status(self, status: str) -> None:
         """Update status indicator, border color, and hints after resolve/unresolve."""
         thread = self.existing_thread
         if not thread:
             return
-        status_label = status.upper()
         resolved = status == "resolved"
         border_color = THEME["green"] if resolved else THEME["blue"]
         dialog = self.query_one("#comment-dialog", Vertical)
-        dialog.border_title = f" Thread #{thread.id} (line {self.line}) [{status_label}] "
-        # Update border color and hints if in normal mode
+        dialog.border_title = self._build_title()
         if self._mode == "normal":
             dialog.styles.border = ("solid", border_color)
             dialog.styles.border_title_color = border_color
@@ -207,6 +214,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         dialog = self.query_one("#comment-dialog", Vertical)
         dialog.styles.border = ("solid", THEME["mauve"])
         dialog.styles.border_title_color = THEME["mauve"]
+        dialog.border_title = self._build_title()
 
     def _enter_normal(self) -> None:
         self._mode = "normal"
@@ -217,6 +225,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         dialog = self.query_one("#comment-dialog", Vertical)
         dialog.styles.border = ("solid", border_color)
         dialog.styles.border_title_color = border_color
+        dialog.border_title = self._build_title()
 
     def on_key(self, event: Key) -> None:
         # Ctrl+C force dismisses from any mode
@@ -265,7 +274,12 @@ class CommentScreen(ModalScreen[CommentResult]):
             self._enter_insert()
         elif key == "r":
             if self._on_resolve:
+                was_resolved = self.existing_thread and self.existing_thread.status == "resolved"
                 self._on_resolve()
+                if not was_resolved:
+                    # Resolving → close popup (thread is done)
+                    self.dismiss(CommentResult("resolve"))
+                # Reopening → stay open (continue conversation)
         elif key in ("j", "down"):
             self.query_one("#comment-history", VerticalScroll).scroll_down()
         elif key in ("k", "up"):

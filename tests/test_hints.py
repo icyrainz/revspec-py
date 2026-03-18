@@ -36,7 +36,7 @@ class TestBuildTopBar:
     def test_file_name(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=False,
         )
         assert "spec.md" in text.plain
@@ -45,7 +45,7 @@ class TestBuildTopBar:
         threads = [_thread("resolved"), _thread("open", tid="t2")]
         text = build_top_bar(
             file_name="spec.md", threads=threads, unread_count=0,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=False,
         )
         assert "1/2 resolved" in text.plain
@@ -54,7 +54,7 @@ class TestBuildTopBar:
         threads = [_thread("resolved"), _thread("resolved", tid="t2")]
         text = build_top_bar(
             file_name="spec.md", threads=threads, unread_count=0,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=False,
         )
         assert "2/2 resolved" in text.plain
@@ -62,7 +62,7 @@ class TestBuildTopBar:
     def test_unread_singular(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=1,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=False,
         )
         assert "1 new reply" in text.plain
@@ -70,7 +70,7 @@ class TestBuildTopBar:
     def test_unread_plural(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=3,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=False,
         )
         assert "3 new replies" in text.plain
@@ -78,7 +78,7 @@ class TestBuildTopBar:
     def test_mtime_changed_warning(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=1, line_count=10, spec_lines=["line"] * 10,
+            cursor_line=1, line_count=10, breadcrumb=None,
             mtime_changed=True,
         )
         assert "Spec changed externally" in text.plain
@@ -86,7 +86,7 @@ class TestBuildTopBar:
     def test_position_top(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=1, line_count=100, spec_lines=["line"] * 100,
+            cursor_line=1, line_count=100, breadcrumb=None,
             mtime_changed=False,
         )
         assert "Top" in text.plain
@@ -94,7 +94,7 @@ class TestBuildTopBar:
     def test_position_bottom(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=100, line_count=100, spec_lines=["line"] * 100,
+            cursor_line=100, line_count=100, breadcrumb=None,
             mtime_changed=False,
         )
         assert "Bot" in text.plain
@@ -102,16 +102,15 @@ class TestBuildTopBar:
     def test_position_percentage(self):
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=50, line_count=100, spec_lines=["line"] * 100,
+            cursor_line=50, line_count=100, breadcrumb=None,
             mtime_changed=False,
         )
         assert "49%" in text.plain or "50%" in text.plain
 
     def test_breadcrumb(self):
-        lines = ["# My Section", "text", "more text"]
         text = build_top_bar(
             file_name="spec.md", threads=[], unread_count=0,
-            cursor_line=3, line_count=3, spec_lines=lines,
+            cursor_line=3, line_count=3, breadcrumb="My Section",
             mtime_changed=False,
         )
         assert "My Section" in text.plain

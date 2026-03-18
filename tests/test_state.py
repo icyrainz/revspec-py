@@ -165,6 +165,39 @@ class TestDeleteThread:
         state.delete_thread("nonexistent")
         assert len(state.threads) == 1
 
+    def test_delete_removes_from_index(self):
+        state = _make_state()
+        t = state.add_comment(5, "Fix")
+        assert state._find_thread(t.id) is t
+        state.delete_thread(t.id)
+        assert state._find_thread(t.id) is None
+
+
+# --- thread_by_id index ---
+
+class TestThreadIndex:
+    def test_find_thread_after_add(self):
+        state = _make_state()
+        t = state.add_comment(5, "Fix")
+        assert state._find_thread(t.id) is t
+
+    def test_find_thread_returns_none(self):
+        state = _make_state()
+        assert state._find_thread("nonexistent") is None
+
+    def test_index_after_reset(self):
+        state = _make_state()
+        state.add_comment(5, "Fix")
+        state.reset([f"line {i}" for i in range(10)])
+        assert len(state._thread_by_id) == 0
+
+    def test_index_survives_reply(self):
+        state = _make_state()
+        t = state.add_comment(5, "Fix")
+        state.reply_to_thread(t.id, "Reply")
+        assert state._find_thread(t.id) is t
+        assert len(t.messages) == 2
+
 
 # --- thread_at_line ---
 

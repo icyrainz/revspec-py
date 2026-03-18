@@ -477,17 +477,19 @@ class TestReplayRobustness:
 # --- hint rendering: insert mode label ---
 
 class TestInsertModeHintLabel:
-    """Insert mode label should use mauve color."""
+    """Mode labels moved to title bar — hints contain only key actions."""
 
-    def test_insert_label_text(self):
+    def test_insert_hints_have_tab(self):
         hints = _render_hints("insert")
         plain = hints.plain
-        assert "[INSERT]" in plain
+        assert "[Tab]" in plain
+        assert "send" in plain
 
-    def test_normal_label_text(self):
+    def test_normal_hints_have_reply(self):
         hints = _render_hints("normal")
         plain = hints.plain
-        assert "[NORMAL]" in plain
+        assert "[i/c]" in plain
+        assert "reply" in plain
 
 
 # --- _do_reload: thread state preserved after reload ---
