@@ -50,7 +50,91 @@ revspec spec.md
 
 Opens a TUI with vim-style navigation. Press `c` on any line to open a thread and start commenting.
 
-### Keybindings
+## Live AI Integration
+
+Revspec communicates with AI coding tools (Claude Code, etc.) via CLI subcommands:
+
+### `revspec watch <file.md>`
+
+Blocks until the reviewer acts, then returns structured output:
+
+```
+=== New Comments ===
+Thread: x1a3f (line 14)
+  Context:
+      12: The system uses polling...
+    > 14: it sends a notification via webhook.
+      16: resource state.
+  [reviewer]: this is unclear
+
+To reply: revspec reply spec.md x1a3f "<your response>"
+When done replying, run: revspec watch spec.md
+```
+
+Watch exits on three events:
+- **Comment/reply** — returns thread content for AI to respond
+- **Submit (`S`)** — returns resolved thread summaries for AI to rewrite the spec
+- **Approve (`A`)** — spec is finalized
+- **Session end** — reviewer quit the TUI
+
+### `revspec reply <file.md> <threadId> "<text>"`
+
+Sends an AI reply that appears instantly in the reviewer's TUI.
+
+### The loop
+
+```
+1. AI generates spec
+2. AI launches: revspec spec.md (in tmux pane)
+3. AI runs: revspec watch spec.md (blocks)
+4. Reviewer comments → AI replies → watch again
+5. Reviewer resolves threads → presses S (submit)
+6. Watch returns resolved thread summaries → AI rewrites spec
+7. TUI reloads with new spec → reviewer continues reviewing
+8. Repeat 3-7 until A (approve)
+```
+
+## Markdown rendering
+
+Revspec renders markdown in-place:
+
+- **Headings** — colored and bold, `#`–`######`
+- **Inline** — bold, italic, bold-italic, strikethrough, `code`, links
+- **Fenced code blocks** — markers dimmed, body in green
+- **Tables** — box-drawing borders, header row bolded, auto-column-widths
+- **Lists** — unordered, ordered, task lists
+- **Blockquotes** — bar gutter, italicized text
+- **Cursor line** highlighting and **search highlights**
+
+## Testing
+
+```bash
+just test             # Unit + integration (pytest)
+just pytest-watch     # Watch mode
+```
+
+391 tests covering state, protocol, markdown, watch, reply, renderer, and bugfixes.
+
+## Protocol
+
+Communication happens through a JSONL file (`spec.review.jsonl`) — append-only, both sides write to it. The JSONL is the single source of truth for the review session.
+
+### Event types
+
+```jsonl
+{"type":"comment","threadId":"x1a3f","line":14,"author":"reviewer","text":"unclear","ts":1710400000}
+{"type":"reply","threadId":"x1a3f","author":"owner","text":"I'll fix it","ts":1710400005}
+{"type":"resolve","threadId":"x1a3f","author":"reviewer","ts":1710400010}
+{"type":"submit","author":"reviewer","ts":1710400050}
+{"type":"approve","author":"reviewer","ts":1710400060}
+{"type":"session-end","author":"reviewer","ts":1710400070}
+```
+
+The `submit` event acts as a round delimiter — the AI rewrites the spec, and the TUI reloads. Events before a `submit` reference the previous spec version.
+
+Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting reviewer), `resolved`, `outdated`.
+
+## Keybindings
 
 **Navigation**
 
@@ -114,90 +198,6 @@ The thread popup has two vim-style modes, indicated by border color and label:
 
 - **Insert mode** (mauve border) — type your comment, `Tab` sends (stays in insert mode for chat-like flow), `Esc` switches to normal mode
 - **Normal mode** (blue/green border) — `j/k` and `Ctrl+D/U` scroll the conversation, `gg/G` top/bottom, `i/c` to reply, `r` to resolve, `q/Esc` to close. Border is green when resolved, blue when open.
-
-### Markdown rendering
-
-Revspec renders markdown in-place:
-
-- **Headings** — colored and bold, `#`–`######`
-- **Inline** — bold, italic, bold-italic, strikethrough, `code`, links
-- **Fenced code blocks** — markers dimmed, body in green
-- **Tables** — box-drawing borders, header row bolded, auto-column-widths
-- **Lists** — unordered, ordered, task lists
-- **Blockquotes** — bar gutter, italicized text
-- **Cursor line** highlighting and **search highlights**
-
-## Live AI Integration
-
-Revspec communicates with AI coding tools (Claude Code, etc.) via CLI subcommands:
-
-### `revspec watch <file.md>`
-
-Blocks until the reviewer acts, then returns structured output:
-
-```
-=== New Comments ===
-Thread: x1a3f (line 14)
-  Context:
-      12: The system uses polling...
-    > 14: it sends a notification via webhook.
-      16: resource state.
-  [reviewer]: this is unclear
-
-To reply: revspec reply spec.md x1a3f "<your response>"
-When done replying, run: revspec watch spec.md
-```
-
-Watch exits on three events:
-- **Comment/reply** — returns thread content for AI to respond
-- **Submit (`S`)** — returns resolved thread summaries for AI to rewrite the spec
-- **Approve (`A`)** — spec is finalized
-- **Session end** — reviewer quit the TUI
-
-### `revspec reply <file.md> <threadId> "<text>"`
-
-Sends an AI reply that appears instantly in the reviewer's TUI.
-
-### The loop
-
-```
-1. AI generates spec
-2. AI launches: revspec spec.md (in tmux pane)
-3. AI runs: revspec watch spec.md (blocks)
-4. Reviewer comments → AI replies → watch again
-5. Reviewer resolves threads → presses S (submit)
-6. Watch returns resolved thread summaries → AI rewrites spec
-7. TUI reloads with new spec → reviewer continues reviewing
-8. Repeat 3-7 until A (approve)
-```
-
-## Testing
-
-```bash
-just test             # Unit + integration (pytest)
-just pytest-watch     # Watch mode
-```
-
-391 tests covering state, protocol, markdown, watch, reply, renderer, and bugfixes.
-
-## Protocol
-
-Communication happens through a JSONL file (`spec.review.jsonl`) — append-only, both sides write to it. The JSONL is the single source of truth for the review session.
-
-### Event types
-
-```jsonl
-{"type":"comment","threadId":"x1a3f","line":14,"author":"reviewer","text":"unclear","ts":1710400000}
-{"type":"reply","threadId":"x1a3f","author":"owner","text":"I'll fix it","ts":1710400005}
-{"type":"resolve","threadId":"x1a3f","author":"reviewer","ts":1710400010}
-{"type":"submit","author":"reviewer","ts":1710400050}
-{"type":"approve","author":"reviewer","ts":1710400060}
-{"type":"session-end","author":"reviewer","ts":1710400070}
-```
-
-The `submit` event acts as a round delimiter — the AI rewrites the spec, and the TUI reloads. Events before a `submit` reference the previous spec version.
-
-Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting reviewer), `resolved`, `outdated`.
 
 ## License
 
