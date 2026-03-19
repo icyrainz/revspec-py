@@ -9,6 +9,7 @@ across all .py files to update CSS strings in sync.
 THEME = {
     "base": None,  # None = transparent (inherit terminal background)
     "crust": "#1e1e2e",  # darkest bg — used for search highlight contrast
+    "mantle": "#181825",  # code block bg — slightly darker than crust
     "panel": "#313244",
     "text": "#cdd6f4",
     "text_muted": "#a6adc8",

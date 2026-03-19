@@ -157,12 +157,21 @@ class SpecPager(ScrollView):
             elif vis_row > scroll_bottom:
                 self.scroll_to(y=vis_row - view_h + 1, animate=False)
 
+    _BG_STYLE = Style(bgcolor=THEME["crust"])
+
+    def _make_strip(self, text: Text, width: int) -> Strip:
+        """Render text to strip, padding right side to full width."""
+        pad = width - text.cell_len
+        if pad > 0:
+            text.append(" " * pad, self._BG_STYLE)
+        return Strip(list(text.render(self._rich_console))).crop(0, width)
+
     def render_line(self, y: int) -> Strip:
         """Render a single visual row. Called by Textual's compositor."""
         virtual_y = y + round(self.scroll_offset.y)
 
         if virtual_y < 0 or virtual_y >= len(self._visual_rows):
-            return Strip.blank(self.size.width)
+            return Strip.blank(self.size.width, self._BG_STYLE)
 
         row = self._visual_rows[virtual_y]
         lines = self.state.spec_lines
@@ -175,19 +184,24 @@ class SpecPager(ScrollView):
             _kind, spec_idx, position = row
             table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
             text = Text()
-            text.append(gutter_blank, Style(color=THEME["text_dim"]))
+            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=THEME["crust"]))
             if table_block:
                 render_table_border(text, table_block.col_widths, position)
-            segments = list(text.render(self._rich_console))
-            return Strip(segments).crop(0, width)
+            return self._make_strip(text, width)
 
         if row[0] == "spec_wrap":
             _kind, spec_idx, seg = row
             line = lines[spec_idx]
             line_num = spec_idx + 1
             is_cursor = line_num == self.cursor_line
-            cursor_bg = THEME["panel"] if is_cursor else None
             in_code = self._code_state_map.get(spec_idx, False)
+            is_fence = line.strip().startswith("```")
+            if is_cursor:
+                cursor_bg = THEME["panel"]
+            elif in_code or is_fence:
+                cursor_bg = THEME["mantle"]
+            else:
+                cursor_bg = THEME["crust"]
 
             start = seg * content_width
             end = start + content_width
@@ -203,8 +217,7 @@ class SpecPager(ScrollView):
             else:
                 content_style = line_style(line, in_code, is_cursor)
                 text.append(segment_text, content_style)
-            segments = list(text.render(self._rich_console))
-            return Strip(segments).crop(0, width)
+            return self._make_strip(text, width)
 
         # Regular spec line
         _kind, spec_idx = row
@@ -212,8 +225,14 @@ class SpecPager(ScrollView):
         line_num = spec_idx + 1
         is_cursor = line_num == self.cursor_line
         thread = self.state.thread_at_line(line_num)
-        cursor_bg = THEME["panel"] if is_cursor else None
         in_code = self._code_state_map.get(spec_idx, False)
+        is_fence = line.strip().startswith("```")
+        if is_cursor:
+            cursor_bg = THEME["panel"]
+        elif in_code or is_fence:
+            cursor_bg = THEME["mantle"]
+        else:
+            cursor_bg = THEME["crust"]
 
         table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
         is_table = table_block is not None and not self.search_query
@@ -273,5 +292,4 @@ class SpecPager(ScrollView):
             if self.search_query:
                 apply_search_highlight(text, gutter_total, self.search_query)
 
-        segments = list(text.render(self._rich_console))
-        return Strip(segments).crop(0, width)
+        return self._make_strip(text, width)

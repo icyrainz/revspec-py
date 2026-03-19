@@ -154,7 +154,7 @@ def render_table_border(text: Text, col_widths: list[int], position: str) -> Non
     else:
         left, mid, right = "\u2514", "\u2534", "\u2518"
     parts = ["\u2500" * (w + 2) for w in col_widths]
-    text.append(left + mid.join(parts) + right, Style(color=THEME["text_dim"]))
+    text.append(left + mid.join(parts) + right, Style(color=THEME["text_dim"], bgcolor=THEME["crust"]))
 
 
 def render_table_separator(text: Text, col_widths: list[int]) -> None:
@@ -162,14 +162,15 @@ def render_table_separator(text: Text, col_widths: list[int]) -> None:
     parts = ["\u2500" * (w + 2) for w in col_widths]
     text.append(
         "\u251c" + "\u253c".join(parts) + "\u2524",
-        Style(color=THEME["text_dim"]),
+        Style(color=THEME["text_dim"], bgcolor=THEME["crust"]),
     )
 
 
 def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_header: bool) -> None:
     """Append a table data/header row with padded cells to Rich Text."""
-    base_style = Style(color=THEME["text"], bold=is_header)
-    dim = Style(color=THEME["text_dim"])
+    bg = THEME["crust"]
+    base_style = Style(color=THEME["text"], bold=is_header, bgcolor=bg)
+    dim = Style(color=THEME["text_dim"], bgcolor=bg)
     for c, width in enumerate(col_widths):
         cell_text = cells[c] if c < len(cells) else ""
         dw = display_width(cell_text)
@@ -184,7 +185,7 @@ def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_hea
             else:
                 text.append(seg_text, base_style)
         if padding > 0:
-            text.append(" " * padding)
+            text.append(" " * padding, base_style)
     text.append(" \u2502", dim)
 
 

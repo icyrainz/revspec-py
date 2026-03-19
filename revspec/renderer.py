@@ -25,14 +25,16 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+")
 
 def line_style(line: str, in_code_block: bool, is_cursor: bool) -> Style:
     """Determine the Rich Style for a spec line based on content and context."""
-    bg = THEME["panel"] if is_cursor else None
+    bg = THEME["panel"] if is_cursor else THEME["crust"]
 
-    # Fence line (``` markers) — dim
+    # Fence line (``` markers) — dim, code block background
     if line.strip().startswith("```"):
-        return Style(color=THEME["text_dim"], bgcolor=bg)
-    # Inside code block — green, no markdown parsing
+        code_bg = THEME["panel"] if is_cursor else THEME["mantle"]
+        return Style(color=THEME["text_dim"], bgcolor=code_bg)
+    # Inside code block — green, code block background
     if in_code_block:
-        return Style(color=THEME["green"], bgcolor=bg)
+        code_bg = THEME["panel"] if is_cursor else THEME["mantle"]
+        return Style(color=THEME["green"], bgcolor=code_bg)
 
     stripped = line.lstrip()
     heading_match = HEADING_RE.match(stripped)
@@ -66,7 +68,7 @@ def append_line_content(
     Handles blockquotes (│ prefix), list items (• bullet), and horizontal
     rules (─×40).  Falls back to ``line_style`` for everything else.
     """
-    bg = THEME["panel"] if is_cursor else None
+    bg = THEME["panel"] if is_cursor else THEME["crust"]
 
     if not in_code_block and not line.strip().startswith("```"):
         stripped = line.lstrip()

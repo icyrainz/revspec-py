@@ -45,6 +45,7 @@ class RevspecApp(App):
     }
     #pager-scroll {
         height: 1fr;
+        background: #1e1e2e;
     }
     #bottom-bar {
         height: 1;
@@ -79,6 +80,7 @@ class RevspecApp(App):
                 if not existing:
                     self.state.threads.append(t)
                     self.state._thread_by_id[t.id] = t
+                    self.state._thread_by_line[t.line] = t
                 else:
                     existing.messages = t.messages
                     existing.status = t.status
@@ -149,6 +151,7 @@ class RevspecApp(App):
             for t in replay_events_to_threads(events):
                 self.state.threads.append(t)
                 self.state._thread_by_id[t.id] = t
+                self.state._thread_by_line[t.line] = t
         self._spec_mtime = new_mtime
         self._spec_mtime_changed = False
         self.search_query = None
