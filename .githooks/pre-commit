@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Sync .claude-plugin version with pyproject.toml before commit
+
+VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+  exit 0
+fi
+
+CHANGED=0
+
+for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+  if [ -f "$f" ]; then
+    CURRENT=$(grep '"version"' "$f" | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+    if [ "$CURRENT" != "$VERSION" ]; then
+      sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$VERSION\"/" "$f"
+      git add "$f"
+      CHANGED=1
+    fi
+  fi
+done
+
+if [ "$CHANGED" = "1" ]; then
+  echo "Synced plugin version to $VERSION"
+fi

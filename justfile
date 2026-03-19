@@ -16,6 +16,7 @@ pytest-watch:
 
 # Install in editable mode for local dev (local venv + global command)
 dev:
+  git config core.hooksPath .githooks
   uv venv && uv pip install hatchling editables && uv pip install -e ".[test,dev]" --no-build-isolation
   pipx install -e . --force
 
