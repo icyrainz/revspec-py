@@ -27,6 +27,10 @@ test = [
     "pytest",
     "pytest-asyncio",
 ]
+dev = [
+    "build",
+    "twine",
+]
 
 [project.scripts]
 revspec = "revspec.cli:main"
