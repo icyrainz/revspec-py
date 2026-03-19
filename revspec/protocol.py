@@ -10,12 +10,12 @@ from typing import Literal
 
 EventType = Literal[
     "comment", "reply", "resolve", "unresolve",
-    "approve", "delete", "round", "session-end", "submit",
+    "approve", "delete", "session-start", "session-end", "submit",
 ]
 
 VALID_EVENT_TYPES = {
     "comment", "reply", "resolve", "unresolve",
-    "approve", "delete", "round", "session-end", "submit",
+    "approve", "delete", "session-start", "session-end", "submit",
 }
 
 
@@ -27,7 +27,6 @@ class LiveEvent:
     thread_id: str | None = None
     line: int | None = None
     text: str | None = None
-    round: int | None = None
 
 
 def is_valid_event(obj: dict) -> bool:
@@ -38,7 +37,7 @@ def is_valid_event(obj: dict) -> bool:
     if not isinstance(obj.get("author"), str):
         return False
     t = obj["type"]
-    if t not in ("approve", "round", "session-end", "submit"):
+    if t not in ("approve", "session-start", "session-end", "submit"):
         if not isinstance(obj.get("threadId"), str):
             return False
     if t == "reply" and not isinstance(obj.get("text"), str):
@@ -50,8 +49,6 @@ def is_valid_event(obj: dict) -> bool:
             return False
         if int(obj["line"]) < 1:
             return False
-    if t == "round" and not isinstance(obj.get("round"), (int, float)):
-        return False
     return True
 
 
@@ -63,7 +60,6 @@ def parse_event(obj: dict) -> LiveEvent:
         thread_id=obj.get("threadId"),
         line=int(obj["line"]) if obj.get("line") is not None else None,
         text=obj.get("text"),
-        round=int(obj["round"]) if obj.get("round") is not None else None,
     )
 
 
@@ -75,8 +71,6 @@ def append_event(jsonl_path: str, event: LiveEvent) -> None:
         data["line"] = event.line
     if event.text is not None:
         data["text"] = event.text
-    if event.round is not None:
-        data["round"] = event.round
     try:
         with open(jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data) + "\n")

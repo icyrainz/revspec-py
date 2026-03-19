@@ -55,14 +55,15 @@ class TestIsValidEvent:
             "type": "session-end", "author": "reviewer", "ts": 6000,
         })
 
-    def test_valid_round(self):
+    def test_valid_session_start(self):
         assert is_valid_event({
-            "type": "round", "author": "reviewer", "ts": 7000, "round": 1,
+            "type": "session-start", "author": "reviewer", "ts": 7000,
         })
 
-    def test_round_missing_round_field(self):
+    def test_round_type_rejected(self):
+        """round event type was removed — should be rejected."""
         assert not is_valid_event({
-            "type": "round", "author": "reviewer", "ts": 7000,
+            "type": "round", "author": "reviewer", "ts": 7000, "round": 1,
         })
 
     def test_invalid_type(self):
@@ -150,11 +151,12 @@ class TestParseEvent:
         assert ev.line is None
         assert ev.text is None
 
-    def test_parse_round(self):
+    def test_parse_session_start(self):
         ev = parse_event({
-            "type": "round", "author": "reviewer", "ts": 4000, "round": 2,
+            "type": "session-start", "author": "reviewer", "ts": 4000,
         })
-        assert ev.round == 2
+        assert ev.type == "session-start"
+        assert ev.ts == 4000
 
     def test_float_ts_cast_to_int(self):
         ev = parse_event({

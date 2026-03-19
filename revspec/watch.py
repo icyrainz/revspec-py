@@ -120,9 +120,9 @@ def _process_new_events(
         # Recover missed approve
         last_approve_idx = _find_last_index(all_evts, lambda e: e.type == "approve")
         if last_approve_idx >= 0:
-            # Check no submit or session-end after the approve (would mean a new session)
+            # Check no submit, session-end, session-start, or comment after the approve
             after = all_evts[last_approve_idx + 1:]
-            has_newer = any(e.type in ("submit", "session-end", "comment") for e in after)
+            has_newer = any(e.type in ("submit", "session-end", "session-start", "comment") for e in after)
             if not has_newer:
                 # Only surface events from after the last submit, not full history
                 last_submit_before = _find_last_index(
@@ -143,7 +143,7 @@ def _process_new_events(
             if last_submit_event.ts == last_submit_ts:
                 return _ProcessResult(new_offset=offset)
             after = all_evts[last_submit_idx + 1:]
-            has_new = any(e.type in ("comment", "reply", "approve", "session-end") for e in after)
+            has_new = any(e.type in ("comment", "reply", "approve", "session-end", "session-start") for e in after)
             if not has_new:
                 round_start = _find_current_round_start(all_evts)
                 round_threads = replay_events_to_threads(all_evts[round_start:])
@@ -157,6 +157,13 @@ def _process_new_events(
         return _ProcessResult(new_offset=offset)
 
     _write_offset(offset_path, new_offset, last_submit_ts)
+
+    # If batch contains a session-start, discard events before it (old session)
+    last_session_start_idx = _find_last_index(events, lambda e: e.type == "session-start")
+    if last_session_start_idx >= 0:
+        events = events[last_session_start_idx + 1:]
+        if not events:
+            return _ProcessResult(new_offset=new_offset)
 
     # Priority: approve > submit > session-end
     if any(e.type == "approve" for e in events):

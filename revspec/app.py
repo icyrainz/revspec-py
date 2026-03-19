@@ -81,6 +81,12 @@ class RevspecApp(App):
                 else:
                     existing.messages = t.messages
                     existing.status = t.status
+            # Mark new session boundary (dedup: skip if last event is already session-start)
+            if events and events[-1].type != "session-start":
+                append_event(self.jsonl_path, LiveEvent(
+                    type="session-start", author="reviewer",
+                    ts=int(time.time() * 1000),
+                ))
 
         # Multi-key sequence state
         self._pending_key: str | None = None

@@ -14,9 +14,10 @@ pytest *args:
 pytest-watch:
   uv run pytest-watch
 
-# Install in editable mode for local dev
+# Install in editable mode for local dev (local venv + global command)
 dev:
-  uv venv && uv pip install hatchling editables && uv pip install -e . --no-build-isolation
+  uv venv && uv pip install hatchling editables && uv pip install -e ".[test]" --no-build-isolation
+  pipx install -e . --force
 
 # Build dist packages
 build:

@@ -253,3 +253,123 @@ class TestWatchCrashRecovery:
         assert "New comment" in captured.out
         assert "Old comment" not in captured.out
         assert "approved" in captured.out.lower()
+
+
+class TestWatchSessionStart:
+    """Tests for session-start event handling across sessions."""
+
+    def test_old_approve_skipped_after_session_start(self, tmp_path, capsys, monkeypatch):
+        """Fresh start: approve + session-start = old session, watcher waits."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Old comment"},
+            {"type": "approve", "author": "reviewer", "ts": 2000},
+            {"type": "session-start", "author": "reviewer", "ts": 5000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert captured.out == ""  # no output — old approve is skipped
+
+    def test_offline_approve_processed_without_session_start(self, tmp_path, capsys, monkeypatch):
+        """Offline approve: no session-start after approve = current session, process it."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "approve", "author": "reviewer", "ts": 1000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "approved" in captured.out.lower()
+
+    def test_dedup_multiple_session_starts(self, tmp_path, capsys, monkeypatch):
+        """Multiple session-starts after approve still skip the old approve."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "approve", "author": "reviewer", "ts": 1000},
+            {"type": "session-start", "author": "reviewer", "ts": 2000},
+            {"type": "session-start", "author": "reviewer", "ts": 3000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert captured.out == ""  # old approve is still skipped
+
+    def test_new_approve_after_session_start_is_processed(self, tmp_path, capsys, monkeypatch):
+        """New session's approve should be processed normally."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            # Session 1
+            {"type": "approve", "author": "reviewer", "ts": 1000},
+            # Session 2
+            {"type": "session-start", "author": "reviewer", "ts": 2000},
+            {"type": "comment", "author": "reviewer", "ts": 3000,
+             "threadId": "t1", "line": 2, "text": "New feedback"},
+            {"type": "approve", "author": "reviewer", "ts": 4000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert "New feedback" in captured.out
+        assert "approved" in captured.out.lower()
+
+    def test_crash_recovery_skips_approve_before_session_start(self, tmp_path, capsys, monkeypatch):
+        """Crash recovery should not recover approve from a previous session."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "approve", "author": "reviewer", "ts": 1000},
+            {"type": "session-start", "author": "reviewer", "ts": 2000},
+        ])
+        # Offset file exists at EOF — simulating a watcher that started and read to end
+        jsonl = tmp_path / "spec.review.jsonl"
+        offset_file = tmp_path / "spec.review.offset"
+        offset_file.write_text(str(jsonl.stat().st_size))
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert captured.out == ""  # no recovery — approve is from old session
+
+    def test_interleaved_session_starts_trims_to_last(self, tmp_path, capsys, monkeypatch):
+        """Trim uses last session-start, not first — old comments between are discarded."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "session-start", "author": "reviewer", "ts": 1000},
+            {"type": "comment", "author": "reviewer", "ts": 2000,
+             "threadId": "t1", "line": 2, "text": "Stale comment"},
+            {"type": "session-start", "author": "reviewer", "ts": 3000},
+            {"type": "approve", "author": "reviewer", "ts": 4000},
+        ])
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        # Only the approve after the last session-start should be processed
+        assert "approved" in captured.out.lower()
+        # Stale comment from before the last session-start should not appear
+        assert "Stale comment" not in captured.out
+
+    def test_crash_recovery_skips_submit_before_session_start(self, tmp_path, capsys, monkeypatch):
+        """Crash recovery should not recover submit from a previous session."""
+        monkeypatch.setenv("REVSPEC_WATCH_NO_BLOCK", "1")
+        spec = _write_spec(tmp_path)
+        _write_jsonl(tmp_path, [
+            {"type": "comment", "author": "reviewer", "ts": 1000,
+             "threadId": "t1", "line": 2, "text": "Old"},
+            {"type": "resolve", "author": "reviewer", "ts": 2000,
+             "threadId": "t1"},
+            {"type": "submit", "author": "reviewer", "ts": 3000},
+            {"type": "session-start", "author": "reviewer", "ts": 4000},
+        ])
+        jsonl = tmp_path / "spec.review.jsonl"
+        offset_file = tmp_path / "spec.review.offset"
+        offset_file.write_text(str(jsonl.stat().st_size))
+
+        run_watch(str(spec))
+        captured = capsys.readouterr()
+        assert captured.out == ""  # no recovery — submit is from old session
