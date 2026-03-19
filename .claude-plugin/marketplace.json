@@ -11,7 +11,7 @@
         "url": "https://github.com/icyrainz/revspec-py.git"
       },
       "description": "Live spec review with real-time AI feedback",
-      "version": "0.3.1"
+      "version": "0.4.1"
     }
   ]
 }

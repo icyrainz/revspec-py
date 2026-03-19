@@ -114,7 +114,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - **Offline-first workflow** — TUI works fully without the AI agent; all comments persist to JSONL and are picked up when the agent starts later
 
 ### Tests
-378 total (state, protocol, markdown, watch, reply, watcher_service, commands, hints, key_dispatch, navigation, renderer, bugfixes, app_smoke)
+391 total (state, protocol, markdown, watch, reply, watcher_service, commands, hints, key_dispatch, navigation, renderer, bugfixes, app_smoke)
 
 ### Known issues / remaining work
 - **Inline markdown in table cells** — table cell contents are rendered as plain text; `parse_inline_markdown()` is not applied inside `render_table_row()`
