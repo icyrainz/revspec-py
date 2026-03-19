@@ -14,7 +14,7 @@ from .state import ReviewState
 from .theme import THEME, status_icon, status_color
 from .renderer import (
     HEADING_RE, line_style, is_block_element, append_line_content,
-    append_inline_styled, append_highlighted, gutter_width,
+    append_inline_styled, apply_search_highlight, gutter_width,
 )
 from .markdown import (
     scan_table_blocks, render_table_border, render_table_separator,
@@ -137,7 +137,7 @@ class SpecPager(ScrollView):
         row = self._visual_rows[vis_row]
         return row[1] + 1
 
-    def scroll_cursor_visible(self, center: bool = False) -> None:
+    def scroll_cursor_visible(self, center: bool = False, margin: int = 0) -> None:
         vis_row = self.visual_row_for_cursor()
         view_h = self.size.height
         if view_h <= 0:
@@ -147,9 +147,14 @@ class SpecPager(ScrollView):
             self.scroll_to(y=target, animate=False)
         else:
             scroll_top = round(self.scroll_offset.y)
-            if vis_row < scroll_top:
+            scroll_bottom = scroll_top + view_h - 1
+            if margin > 0 and vis_row - scroll_top < margin:
+                self.scroll_to(y=max(0, vis_row - margin), animate=False)
+            elif margin > 0 and scroll_bottom - vis_row < margin:
+                self.scroll_to(y=vis_row - view_h + margin + 1, animate=False)
+            elif vis_row < scroll_top:
                 self.scroll_to(y=vis_row, animate=False)
-            elif vis_row >= scroll_top + view_h:
+            elif vis_row > scroll_bottom:
                 self.scroll_to(y=vis_row - view_h + 1, animate=False)
 
     def render_line(self, y: int) -> Strip:
@@ -249,15 +254,7 @@ class SpecPager(ScrollView):
             if self.wrap_width > 0 and len(content) > content_width:
                 content = content[:content_width]
 
-            if self.search_query:
-                cs = self.search_query != self.search_query.lower()
-                q = self.search_query if cs else self.search_query.lower()
-                hay = content if cs else content.lower()
-                if q in hay:
-                    append_highlighted(text, content, self.search_query, content_style)
-                else:
-                    text.append(content, content_style)
-            elif is_block_element(line, in_code):
+            if is_block_element(line, in_code):
                 append_line_content(text, content, in_code, is_cursor)
             elif not in_code and not line.strip().startswith("```"):
                 stripped = line.lstrip()
@@ -272,6 +269,9 @@ class SpecPager(ScrollView):
                     append_inline_styled(text, content, content_style)
             else:
                 text.append(content, content_style)
+
+            if self.search_query:
+                apply_search_highlight(text, gutter_total, self.search_query)
 
         segments = list(text.render(self._rich_console))
         return Strip(segments).crop(0, width)

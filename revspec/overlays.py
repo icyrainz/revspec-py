@@ -16,6 +16,7 @@ from rich.style import Style
 from .protocol import Thread
 from .theme import THEME, status_icon, status_color
 from .hints import build_hints
+from .renderer import smartcase_prepare
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +35,16 @@ class SearchScreen(ModalScreen[tuple[str, int, int] | None]):
         height: 1;
         background: #313244;
     }
+    .search-prefix {
+        width: 1;
+        height: 1;
+        color: #cdd6f4;
+    }
     #search-input {
-        width: 100%;
+        width: 1fr;
+        height: 1;
+        border: none;
+        padding: 0;
     }
     """
 
@@ -60,8 +69,7 @@ class SearchScreen(ModalScreen[tuple[str, int, int] | None]):
             self._on_preview(raw if len(raw) >= 3 else None)
 
     def _count_matches(self, query: str) -> int:
-        case_sensitive = query != query.lower()
-        q = query if case_sensitive else query.lower()
+        q, case_sensitive = smartcase_prepare(query)
         count = 0
         for line in self.spec_lines:
             hay = line if case_sensitive else line.lower()
@@ -92,8 +100,7 @@ class SearchScreen(ModalScreen[tuple[str, int, int] | None]):
             self.dismiss(None)
 
     def _find_match(self, query: str, current: int, direction: int) -> int | None:
-        case_sensitive = query != query.lower()
-        q = query if case_sensitive else query.lower()
+        q, case_sensitive = smartcase_prepare(query)
         total = len(self.spec_lines)
         for offset in range(1, total + 1):
             i = (current - 1 + offset * direction) % total

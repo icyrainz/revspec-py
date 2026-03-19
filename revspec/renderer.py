@@ -110,26 +110,38 @@ def append_inline_styled(
             text.append(seg_text, base_style)
 
 
-def append_highlighted(
-    text: Text, content: str, query: str,
-    base_style: Style,
-) -> None:
-    """Highlight search query matches within content."""
+def smartcase_prepare(query: str) -> tuple[str, bool]:
+    """Return (normalized_query, case_sensitive) using smartcase rules.
+
+    If *query* contains any uppercase character, match case-sensitively.
+    Otherwise match case-insensitively (lowered).
+    """
     case_sensitive = query != query.lower()
-    q = query if case_sensitive else query.lower()
-    haystack = content if case_sensitive else content.lower()
+    return (query if case_sensitive else query.lower(), case_sensitive)
+
+
+HIGHLIGHT_STYLE = Style(color=THEME["crust"], bgcolor=THEME["yellow"], bold=True)
+
+
+def apply_search_highlight(text: Text, gutter_len: int, query: str) -> None:
+    """Overlay search highlights onto an already-styled Rich Text.
+
+    Searches the rendered plain text (after the gutter) for *query* matches
+    (smartcase) and applies highlight styling at those positions.
+    """
+    if not query:
+        return
+    q, case_sensitive = smartcase_prepare(query)
+    plain = text.plain
+    haystack = plain[gutter_len:] if case_sensitive else plain[gutter_len:].lower()
     pos = 0
-    while pos < len(content):
+    while pos < len(haystack):
         idx = haystack.find(q, pos)
         if idx == -1:
-            text.append(content[pos:], base_style)
             break
-        if idx > pos:
-            text.append(content[pos:idx], base_style)
-        text.append(
-            content[idx:idx + len(query)],
-            Style(color=THEME["crust"], bgcolor=THEME["yellow"], bold=True),
-        )
+        start = gutter_len + idx
+        end = start + len(query)
+        text.stylize(HIGHLIGHT_STYLE, start, end)
         pos = idx + len(query)
 
 

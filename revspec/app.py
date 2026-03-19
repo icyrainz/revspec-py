@@ -21,6 +21,7 @@ from .hints import build_hints, build_top_bar, build_bottom_bar
 from .key_dispatch import SequenceRouter
 from .navigation import JumpList, HeadingIndex
 from .pager import SpecPager
+from .renderer import smartcase_prepare
 from .overlays import (
     SearchScreen, ConfirmScreen, ThreadListScreen,
     HelpScreen, SpinnerScreen, CommandScreen,
@@ -105,7 +106,10 @@ class RevspecApp(App):
         self._message_timer = None
 
         # Line wrapping
-        self._wrap_enabled = False
+        self._wrap_enabled = True
+
+        # Scroll margin — lines of context kept above/below cursor on search jumps
+        self.search_scroll_margin: int = 5
 
         # Spec mutation guard
         self._spec_mtime = Path(spec_file).stat().st_mtime
@@ -125,6 +129,9 @@ class RevspecApp(App):
         yield Static(self._bottom_bar_text(), id="bottom-bar")
 
     def on_mount(self) -> None:
+        if self.pager_widget:
+            self.pager_widget.wrap_width = self.size.width if self.size.width > 0 else 200
+            self.pager_widget.invalidate_table_cache()
         self._refresh()
         # Start live watcher polling
         self._watcher_service.init_offset()
@@ -286,10 +293,10 @@ class RevspecApp(App):
         if self._message_timer is None:
             self.query_one("#bottom-bar", Static).update(self._bottom_bar_text())
 
-    def _scroll_to_cursor(self, center: bool = False) -> None:
+    def _scroll_to_cursor(self, center: bool = False, margin: int = 0) -> None:
         """Scroll the pager to keep the cursor line visible."""
         if self.pager_widget:
-            self.pager_widget.scroll_cursor_visible(center=center)
+            self.pager_widget.scroll_cursor_visible(center=center, margin=margin)
 
     def _show_transient(self, message: str, icon: str | None = None, duration: float = 1.5) -> None:
         if self._message_timer is not None:
@@ -754,8 +761,7 @@ class RevspecApp(App):
         if not self.search_query:
             self._show_transient("No active search \u2014 use / to search")
             return
-        case_sensitive = self.search_query != self.search_query.lower()
-        q = self.search_query if case_sensitive else self.search_query.lower()
+        q, case_sensitive = smartcase_prepare(self.search_query)
         total = self.state.line_count
         for offset in range(1, total + 1):
             i = (self.state.cursor_line - 1 + offset * direction) % total
@@ -767,6 +773,7 @@ class RevspecApp(App):
                 self._push_jump()
                 self.state.cursor_line = match_line
                 self._refresh()
+                self._scroll_to_cursor(margin=self.search_scroll_margin)
                 if wrapped:
                     msg = "Search wrapped to top" if direction == 1 else "Search wrapped to bottom"
                     self._show_transient(msg, "info", 1.2)

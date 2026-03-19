@@ -5,7 +5,8 @@ from rich.style import Style
 
 from revspec.renderer import (
     line_style, is_block_element, append_line_content,
-    append_inline_styled, append_highlighted, gutter_width,
+    append_inline_styled, apply_search_highlight, smartcase_prepare,
+    gutter_width, HIGHLIGHT_STYLE,
 )
 from revspec.theme import THEME
 
@@ -120,31 +121,82 @@ class TestAppendInlineStyled:
         assert "code" in text.plain
 
 
-class TestAppendHighlighted:
-    def test_basic_highlight(self):
+class TestSmartcasePrepare:
+    def test_lowercase_query_is_insensitive(self):
+        q, cs = smartcase_prepare("hello")
+        assert q == "hello"
+        assert cs is False
+
+    def test_uppercase_query_is_sensitive(self):
+        q, cs = smartcase_prepare("Hello")
+        assert q == "Hello"
+        assert cs is True
+
+    def test_all_caps_is_sensitive(self):
+        q, cs = smartcase_prepare("FOO")
+        assert q == "FOO"
+        assert cs is True
+
+    def test_digits_only_is_insensitive(self):
+        q, cs = smartcase_prepare("123")
+        assert q == "123"
+        assert cs is False
+
+
+class TestApplySearchHighlight:
+    def _make_text(self, gutter: str, content: str) -> Text:
         text = Text()
-        base = Style(color="white")
-        append_highlighted(text, "hello world hello", "hello", base)
-        plain = text.plain
-        assert plain == "hello world hello"
+        text.append(gutter, Style(color="white"))
+        text.append(content, Style(color="white"))
+        return text
+
+    def test_basic_highlight(self):
+        text = self._make_text(">>", "hello world hello")
+        apply_search_highlight(text, 2, "hello")
+        assert text.plain == ">>hello world hello"
+        # Check that highlight style is applied at correct positions
+        spans = text._spans
+        highlight_spans = [s for s in spans if s.style == HIGHLIGHT_STYLE]
+        assert len(highlight_spans) == 2
+        assert highlight_spans[0].start == 2  # gutter(2) + 0
+        assert highlight_spans[0].end == 7    # gutter(2) + 5
+        assert highlight_spans[1].start == 14 # gutter(2) + 12
+        assert highlight_spans[1].end == 19   # gutter(2) + 17
 
     def test_case_insensitive(self):
-        text = Text()
-        base = Style(color="white")
-        append_highlighted(text, "Hello World", "hello", base)
-        assert text.plain == "Hello World"
+        text = self._make_text(">>", "Hello World")
+        apply_search_highlight(text, 2, "hello")
+        highlight_spans = [s for s in text._spans if s.style == HIGHLIGHT_STYLE]
+        assert len(highlight_spans) == 1
+        assert text.plain[highlight_spans[0].start:highlight_spans[0].end] == "Hello"
 
     def test_case_sensitive(self):
-        text = Text()
-        base = Style(color="white")
-        append_highlighted(text, "Hello hello", "Hello", base)
-        assert text.plain == "Hello hello"
+        text = self._make_text(">>", "Hello hello")
+        apply_search_highlight(text, 2, "Hello")
+        highlight_spans = [s for s in text._spans if s.style == HIGHLIGHT_STYLE]
+        assert len(highlight_spans) == 1
+        assert text.plain[highlight_spans[0].start:highlight_spans[0].end] == "Hello"
 
     def test_no_match(self):
-        text = Text()
-        base = Style(color="white")
-        append_highlighted(text, "hello world", "xyz", base)
-        assert text.plain == "hello world"
+        text = self._make_text(">>", "hello world")
+        apply_search_highlight(text, 2, "xyz")
+        highlight_spans = [s for s in text._spans if s.style == HIGHLIGHT_STYLE]
+        assert len(highlight_spans) == 0
+
+    def test_empty_query_noop(self):
+        text = self._make_text(">>", "hello world")
+        apply_search_highlight(text, 2, "")
+        highlight_spans = [s for s in text._spans if s.style == HIGHLIGHT_STYLE]
+        assert len(highlight_spans) == 0
+
+    def test_gutter_not_highlighted(self):
+        # "he" appears in gutter ">>he" but should not be highlighted
+        text = self._make_text(">>he", "llo world hello")
+        apply_search_highlight(text, 4, "he")
+        highlight_spans = [s for s in text._spans if s.style == HIGHLIGHT_STYLE]
+        # Only matches in content, not gutter
+        for span in highlight_spans:
+            assert span.start >= 4
 
 
 class TestGutterWidth:
