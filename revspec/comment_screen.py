@@ -145,7 +145,7 @@ class CommentScreen(ModalScreen[CommentResult]):
             icon = status_icon(thread.status)
             return f" \\[{mode_label}] {icon} Thread #{thread.id} "
         else:
-            return f" \\[{mode_label}] New comment on line {self.line} "
+            return f" \\[{mode_label}] New comment "
 
     def on_mount(self) -> None:
         dialog = self.query_one("#comment-dialog", Vertical)

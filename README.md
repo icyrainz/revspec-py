@@ -2,6 +2,10 @@
 
 A review tool for AI-generated spec documents with real-time AI conversation. Comment on specific lines, get AI replies instantly, resolve discussions, submit for rewrites, and approve — all without leaving the terminal.
 
+## Demo
+
+![revspec demo](demo/demo.gif)
+
 ## Why
 
 When an AI generates a spec, the human review step breaks the agentic loop. You have to open the file separately, read it, then type unstructured feedback. Revspec closes this loop with a TUI that lets you comment inline and discuss with the AI in real-time — like a chatroom anchored to the spec.
@@ -174,7 +178,7 @@ just test             # Unit + integration (pytest)
 just pytest-watch     # Watch mode
 ```
 
-206 tests covering state, protocol, markdown, watch, reply, and bugfixes.
+391 tests covering state, protocol, markdown, watch, reply, renderer, and bugfixes.
 
 ## Protocol
 

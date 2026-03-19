@@ -41,9 +41,11 @@ class TestLineStyle:
         s = line_style("hello", False, True)
         assert s.bgcolor is not None
 
-    def test_no_cursor_no_bg(self):
+    def test_no_cursor_has_crust_bg(self):
+        from revspec.theme import THEME
         s = line_style("hello", False, False)
-        assert s.bgcolor is None
+        assert s.bgcolor is not None
+        assert s.bgcolor.name == THEME["crust"]
 
 
 class TestIsBlockElement:

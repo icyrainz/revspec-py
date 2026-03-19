@@ -32,3 +32,11 @@ publish: build
 # Show what would be published
 check:
   uv run python -m twine check dist/*
+
+# Record the demo GIF
+record-demo:
+  rm -f demo/spec.review.jsonl demo/spec.review.lock demo/spec.review.offset
+  cp demo/spec.original.md demo/spec.md
+  python3 demo/reply.py &
+  vhs demo/demo.tape
+  kill %1 2>/dev/null || true
