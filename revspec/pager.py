@@ -312,7 +312,7 @@ class SpecPager(ScrollView):
                     Style(color=THEME["text_muted"], italic=True, bgcolor=cursor_bg),
                 )
             else:
-                content_style = line_style(line, in_code, is_cursor)
+                content_style = line_style(line, in_code, is_cursor, bg=cursor_bg)
                 text.append(segment_text, content_style)
             return self._make_strip(text, width)
 
@@ -369,13 +369,13 @@ class SpecPager(ScrollView):
                 cells = parse_table_cells(line)
                 render_table_row(text, cells, table_block.col_widths, is_header)
         else:
-            content_style = line_style(line, in_code, is_cursor)
+            content_style = line_style(line, in_code, is_cursor, bg=cursor_bg)
             content = line if line else " "
             if self.wrap_width > 0 and len(content) > content_width:
                 content = content[:content_width]
 
             if is_block_element(line, in_code):
-                append_line_content(text, content, in_code, is_cursor)
+                append_line_content(text, content, in_code, is_cursor, bg=cursor_bg)
             elif not in_code and not line.strip().startswith("```"):
                 stripped = line.lstrip()
                 heading_match = HEADING_RE.match(stripped)

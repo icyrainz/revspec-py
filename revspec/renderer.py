@@ -23,9 +23,13 @@ _UL_RE = re.compile(r"^(\s*)([-*+])\s+(.*)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+")
 
 
-def line_style(line: str, in_code_block: bool, is_cursor: bool) -> Style:
-    """Determine the Rich Style for a spec line based on content and context."""
-    bg = THEME["panel"] if is_cursor else THEME["crust"]
+def line_style(line: str, in_code_block: bool, is_cursor: bool, bg: str | None = None) -> Style:
+    """Determine the Rich Style for a spec line based on content and context.
+
+    If *bg* is provided, it overrides the default background color.
+    """
+    if bg is None:
+        bg = THEME["panel"] if is_cursor else THEME["crust"]
 
     # Fence line (``` markers) — dim, code block background
     if line.strip().startswith("```"):
@@ -62,13 +66,16 @@ def is_block_element(line: str, in_code_block: bool) -> bool:
 
 def append_line_content(
     text: Text, line: str, in_code_block: bool, is_cursor: bool,
+    bg: str | None = None,
 ) -> None:
     """Append styled markdown content segments to *text*.
 
     Handles blockquotes (│ prefix), list items (• bullet), and horizontal
     rules (─×40).  Falls back to ``line_style`` for everything else.
+    If *bg* is provided, it overrides the default background color.
     """
-    bg = THEME["panel"] if is_cursor else THEME["crust"]
+    if bg is None:
+        bg = THEME["panel"] if is_cursor else THEME["crust"]
 
     if not in_code_block and not line.strip().startswith("```"):
         stripped = line.lstrip()
