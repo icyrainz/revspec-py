@@ -165,3 +165,10 @@ class TestAffectsRange:
     def test_range_unchanged_with_surrounding_diff(self):
         ds = DiffState(["a", "| x |", "b"], ["c", "| x |", "d"])
         assert ds.affects_range(1, 1) is False
+
+    def test_affects_range_ignores_active_state(self):
+        """affects_range returns True regardless of is_active — call site gates."""
+        ds = DiffState(["a", "| x |", "b"], ["a", "| x |", "| y |", "b"])
+        ds.toggle()  # deactivate
+        assert ds.is_active is False
+        assert ds.affects_range(1, 2) is True  # still returns True

@@ -66,6 +66,18 @@ class SpecPager(ScrollView):
         ds = self.diff_state
         return ds is not None and ds.is_active and ds.is_added(spec_idx)
 
+    def _line_bg(self, spec_idx: int, is_cursor: bool) -> str | None:
+        """Resolve background color for a spec line."""
+        if is_cursor:
+            return THEME["panel"]
+        if self._is_diff_added(spec_idx):
+            return THEME["diff_added_bg"]
+        in_code = self._code_state_map.get(spec_idx, False)
+        is_fence = self.state.spec_lines[spec_idx].strip().startswith("```")
+        if in_code or is_fence:
+            return THEME["mantle"]
+        return THEME["crust"]
+
     def _update_gutter_cache(self) -> None:
         self._cached_num_width, self._cached_gutter_total = gutter_width(
             len(self.state.spec_lines), self.show_line_numbers
@@ -286,15 +298,7 @@ class SpecPager(ScrollView):
             is_cursor = line_num == self.cursor_line
             in_code = self._code_state_map.get(spec_idx, False)
             is_fence = line.strip().startswith("```")
-            diff_added = self._is_diff_added(spec_idx)
-            if is_cursor:
-                cursor_bg = THEME["panel"]
-            elif diff_added:
-                cursor_bg = THEME["diff_added_bg"]
-            elif in_code or is_fence:
-                cursor_bg = THEME["mantle"]
-            else:
-                cursor_bg = THEME["crust"]
+            cursor_bg = self._line_bg(spec_idx, is_cursor)
 
             start = seg * content_width
             end = start + content_width
@@ -321,14 +325,7 @@ class SpecPager(ScrollView):
         in_code = self._code_state_map.get(spec_idx, False)
         is_fence = line.strip().startswith("```")
         diff_added = self._is_diff_added(spec_idx)
-        if is_cursor:
-            cursor_bg = THEME["panel"]
-        elif diff_added:
-            cursor_bg = THEME["diff_added_bg"]
-        elif in_code or is_fence:
-            cursor_bg = THEME["mantle"]
-        else:
-            cursor_bg = THEME["crust"]
+        cursor_bg = self._line_bg(spec_idx, is_cursor)
 
         table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
         is_table = table_block is not None and not self.search_query
