@@ -49,6 +49,9 @@ def parse_command(raw: str) -> CommandResult:
     if cmd == "wrap":
         return CommandResult(action="wrap")
 
+    if cmd == "diff":
+        return CommandResult(action="diff")
+
     # Try line number
     try:
         line_num = int(cmd)

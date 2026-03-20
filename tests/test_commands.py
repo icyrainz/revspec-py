@@ -101,3 +101,8 @@ class TestUnknown:
 
     def test_partial_command(self):
         assert parse_command("sub").action == "unknown"
+
+
+class TestDiffCommand:
+    def test_diff(self):
+        assert parse_command("diff").action == "diff"
