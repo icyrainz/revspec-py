@@ -40,6 +40,7 @@ revspec/
   key_dispatch.py     # Two-key sequence registry and dispatch
   hints.py            # Context-sensitive hint bar content
   commands.py         # Command mode parsing (:q, :wrap, :{N}, etc.)
+  diff_state.py        # DiffState — line-level diff computation between spec versions
   watcher_service.py  # LiveWatcherService — JSONL polling for AI replies
 ```
 
@@ -96,6 +97,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - Reply CLI subcommand with thread validation, shell escape cleanup
 - All overlay screens use event.stop() to prevent key leaking to main app
 - Welcome hint on first launch (8s)
+- Inline diff view after spec reload: removed lines as red ghost rows, added lines with green background, `+`/`-` gutter markers, toggle `\d`, hunk navigation `]d`/`[d`, `[DIFF +N -M]` top bar indicator
 
 ### Python-only improvements (to port back to Bun version)
 - **Comment popup stays in insert mode after Tab submit** — chat-like flow; only Escape returns to normal mode
@@ -114,7 +116,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 - **Offline-first workflow** — TUI works fully without the AI agent; all comments persist to JSONL and are picked up when the agent starts later
 
 ### Tests
-391 total (state, protocol, markdown, watch, reply, watcher_service, commands, hints, key_dispatch, navigation, renderer, bugfixes, app_smoke)
+421 total (state, protocol, markdown, watch, reply, watcher_service, commands, hints, key_dispatch, navigation, renderer, bugfixes, app_smoke)
 
 ### Known issues / remaining work
 - **Inline markdown in table cells** — table cell contents are rendered as plain text; `parse_inline_markdown()` is not applied inside `render_table_row()`
@@ -160,12 +162,16 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 | Escape | Clear search highlights | app.ts:601 |
 | Ctrl+R | Reload spec | — |
 | Ctrl+C | Exit (session-end) | app.ts:563 |
+| \d | Toggle diff view | — |
+| ]d | Next diff hunk | — |
+| [d | Previous diff hunk | — |
 
 ### Toggles
 | Key | Action |
 |-----|--------|
 | \w | Toggle line wrapping |
 | \n | Toggle line numbers |
+| \d | Toggle diff view |
 
 ### Command mode
 | Command | Action |
@@ -174,6 +180,7 @@ Each event is a single JSON line with `type`, `author`, `ts` fields, plus type-s
 | :q! | Force quit |
 | :qa, :wq, etc. | All quit variants supported |
 | :wrap | Toggle line wrapping |
+| :diff | Toggle diff view (same as \d) |
 | :{N} | Jump to line number (clamps to range, rejects <=0) |
 | :submit | Submit for rewrite (same as S) |
 | :approve | Approve spec (same as A) |
