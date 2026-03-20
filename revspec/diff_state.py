@@ -69,6 +69,13 @@ class DiffState:
     def stats(self) -> tuple[int, int]:
         return self._stats
 
+    def affects_range(self, start: int, count: int) -> bool:
+        """True if any line in [start, start+count) is added or has removals before it."""
+        for idx in range(start, start + count):
+            if idx in self._added or idx in self._removed_blocks:
+                return True
+        return False
+
     def next_hunk(self, current_spec_line: int) -> int | None:
         if not self._hunk_starts:
             return None

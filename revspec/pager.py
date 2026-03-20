@@ -24,14 +24,6 @@ from .markdown import (
 )
 
 
-def _table_has_diff(block: TableBlock, diff_state: DiffState) -> bool:
-    """Check if any line in a table block has diff changes."""
-    for idx in range(block.start_index, block.start_index + len(block.lines)):
-        if diff_state.is_added(idx) or diff_state.removed_lines_before(idx):
-            return True
-    return False
-
-
 class SpecPager(ScrollView):
     """Renders spec lines with line numbers, cursor highlight, and gutter indicators.
 
@@ -79,7 +71,8 @@ class SpecPager(ScrollView):
             len(self.state.spec_lines), self.show_line_numbers
         )
 
-    def _append_ghost_rows(self, rows: list[tuple], removed_text: str, content_width: int, ghost_content_width: int) -> None:
+    @staticmethod
+    def _append_ghost_rows(rows: list[tuple], removed_text: str, content_width: int, ghost_content_width: int) -> None:
         """Append diff_removed (and optional wrap) rows for a single removed line."""
         rows.append(("diff_removed", removed_text))
         if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
@@ -128,7 +121,7 @@ class SpecPager(ScrollView):
             is_table = (
                 table_block is not None
                 and not self.search_query
-                and not (diff_active and _table_has_diff(table_block, diff))
+                and not (diff_active and diff.affects_range(table_block.start_index, len(table_block.lines)))
             )
 
             code_state_map[i] = in_code
@@ -222,11 +215,11 @@ class SpecPager(ScrollView):
 
     _BG_STYLE = Style(bgcolor=THEME["crust"])
 
-    def _make_strip(self, text: Text, width: int) -> Strip:
+    def _make_strip(self, text: Text, width: int, bg_style: Style | None = None) -> Strip:
         """Render text to strip, padding right side to full width."""
         pad = width - text.cell_len
         if pad > 0:
-            text.append(" " * pad, self._BG_STYLE)
+            text.append(" " * pad, bg_style or self._BG_STYLE)
         return Strip(list(text.render(self._rich_console))).crop(0, width)
 
     def render_line(self, y: int) -> Strip:
@@ -256,41 +249,35 @@ class SpecPager(ScrollView):
         if row[0] == "diff_removed":
             removed_text = row[1]
             bg = THEME["diff_removed_bg"]
+            bg_style = Style(bgcolor=bg)
             text = Text()
             # Gutter: [space][space][-][padding] — same width as spec gutter
-            text.append(" ", Style(bgcolor=bg))  # cursor column
-            text.append(" ", Style(bgcolor=bg))  # gutter icon column
+            text.append(" ", bg_style)  # cursor column
+            text.append(" ", bg_style)  # gutter icon column
             text.append("-", Style(color=THEME["red"], bgcolor=bg))
             if self.show_line_numbers:
-                text.append(" " * (num_width + 1), Style(bgcolor=bg))
+                text.append(" " * (num_width + 1), bg_style)
             content = removed_text if removed_text else " "
             if self.wrap_width > 0:
                 ghost_cw = width - gutter_total
                 if ghost_cw > 0 and len(content) > ghost_cw:
                     content = content[:ghost_cw]
             text.append(content, Style(color=THEME["text_dim"], bgcolor=bg))
-            # Pad with diff bg (not default crust) so the full row is tinted
-            pad = width - text.cell_len
-            if pad > 0:
-                text.append(" " * pad, Style(bgcolor=bg))
-            return Strip(list(text.render(self._rich_console))).crop(0, width)
+            return self._make_strip(text, width, bg_style)
 
         if row[0] == "diff_removed_wrap":
             removed_text = row[1]
             seg = row[2]
             bg = THEME["diff_removed_bg"]
+            bg_style = Style(bgcolor=bg)
             ghost_cw = width - gutter_total
             start = seg * ghost_cw
             end = start + ghost_cw
             segment_text = removed_text[start:end]
             text = Text()
-            text.append(" " * gutter_total, Style(bgcolor=bg))
+            text.append(" " * gutter_total, bg_style)
             text.append(segment_text, Style(color=THEME["text_dim"], bgcolor=bg))
-            # Pad with diff bg
-            pad = width - text.cell_len
-            if pad > 0:
-                text.append(" " * pad, Style(bgcolor=bg))
-            return Strip(list(text.render(self._rich_console))).crop(0, width)
+            return self._make_strip(text, width, bg_style)
 
         if row[0] == "spec_wrap":
             _kind, spec_idx, seg = row

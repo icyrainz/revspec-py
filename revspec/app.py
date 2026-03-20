@@ -586,41 +586,38 @@ class RevspecApp(App):
         else:
             self._show_transient("No unread replies")
 
-    def _next_hunk(self) -> None:
+    def _navigate_hunk(self, forward: bool) -> None:
         if self._diff_state is None or not self._diff_state.has_diff():
             self._show_transient("No diff available", "warning")
             return
         wrapped = False
-        target = self._diff_state.next_hunk(self.state.cursor_line)
-        if target is None:
-            target = self._diff_state.next_hunk(0)
+        if forward:
+            target = self._diff_state.next_hunk(self.state.cursor_line)
             if target is None:
-                return
-            wrapped = True
-            self._show_transient("Wrapped to first change", "info", 1.2)
+                target = self._diff_state.next_hunk(0)
+                if target is None:
+                    return
+                wrapped = True
+                self._show_transient("Wrapped to first change", "info", 1.2)
+        else:
+            target = self._diff_state.prev_hunk(self.state.cursor_line)
+            if target is None:
+                target = self._diff_state.prev_hunk(self.state.line_count + 1)
+                if target is None:
+                    return
+                wrapped = True
+                self._show_transient("Wrapped to last change", "info", 1.2)
         self._push_jump()
         self.state.cursor_line = target
         self._refresh()
         if not wrapped and not self._diff_state.is_added(target - 1):
             self._show_transient("Deletion above", "info", 1.2)
 
+    def _next_hunk(self) -> None:
+        self._navigate_hunk(forward=True)
+
     def _prev_hunk(self) -> None:
-        if self._diff_state is None or not self._diff_state.has_diff():
-            self._show_transient("No diff available", "warning")
-            return
-        wrapped = False
-        target = self._diff_state.prev_hunk(self.state.cursor_line)
-        if target is None:
-            target = self._diff_state.prev_hunk(self.state.line_count + 1)
-            if target is None:
-                return
-            wrapped = True
-            self._show_transient("Wrapped to last change", "info", 1.2)
-        self._push_jump()
-        self.state.cursor_line = target
-        self._refresh()
-        if not wrapped and not self._diff_state.is_added(target - 1):
-            self._show_transient("Deletion above", "info", 1.2)
+        self._navigate_hunk(forward=False)
 
     def _seq_heading_1_fwd(self) -> None:
         self._jump_heading(1, forward=True)

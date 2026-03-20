@@ -1,7 +1,5 @@
 """Tests for DiffState — pure diff computation logic."""
 from revspec.diff_state import DiffState
-from revspec.pager import _table_has_diff
-from revspec.markdown import TableBlock
 
 
 class TestNoDiff:
@@ -144,34 +142,26 @@ class TestGhostRowInterleaving:
         ds = DiffState(["a", "b", "c"], ["a"])
         assert ds.removed_lines_before(1) == ["b", "c"]
 
-    def test_no_ghost_rows_when_inactive(self):
+    def test_data_available_when_inactive(self):
         ds = DiffState(["a", "b", "c"], ["a", "c"])
         ds.toggle()
         assert ds.removed_lines_before(1) == ["b"]
         assert ds.is_active is False
 
 
-class TestTableHasDiff:
-    def _make_table_block(self, start, lines):
-        """Create a minimal TableBlock for testing."""
-        return TableBlock(start_index=start, lines=lines, col_widths=[], separator_index=-1)
-
-    def test_no_diff_in_table(self):
+class TestAffectsRange:
+    def test_no_diff_in_range(self):
         ds = DiffState(["a", "| x |", "| y |", "b"], ["a", "| x |", "| y |", "b"])
-        block = self._make_table_block(1, ["| x |", "| y |"])
-        assert _table_has_diff(block, ds) is False
+        assert ds.affects_range(1, 2) is False
 
-    def test_added_line_in_table(self):
+    def test_added_line_in_range(self):
         ds = DiffState(["a", "| x |", "b"], ["a", "| x |", "| y |", "b"])
-        block = self._make_table_block(1, ["| x |", "| y |"])
-        assert _table_has_diff(block, ds) is True
+        assert ds.affects_range(1, 2) is True
 
-    def test_removed_line_before_table(self):
+    def test_removed_line_at_range_start(self):
         ds = DiffState(["a", "| z |", "| x |", "b"], ["a", "| x |", "b"])
-        block = self._make_table_block(1, ["| x |"])
-        assert _table_has_diff(block, ds) is True
+        assert ds.affects_range(1, 1) is True
 
-    def test_table_unchanged_with_surrounding_diff(self):
+    def test_range_unchanged_with_surrounding_diff(self):
         ds = DiffState(["a", "| x |", "b"], ["c", "| x |", "d"])
-        block = self._make_table_block(1, ["| x |"])
-        assert _table_has_diff(block, ds) is False
+        assert ds.affects_range(1, 1) is False
