@@ -137,11 +137,11 @@ if diff_state and diff_state.is_active:
 
 **Tables with diffs**: If any line in a table block has a diff (is in `_added`, or has `removed_lines_before` it), the entire table is rendered as **raw pipe-delimited text** — no box-drawing borders, no `scan_table_blocks` formatting. Ghost rows appear naturally between raw table lines. Tables with zero diffs keep their box-drawing rendering. This avoids both visual corruption and silent suppression of changes.
 
-Implementation: during `rebuild_visual_model()`, check `table_has_diff(block, diff_state)` — if any line in the block range is added or has removals before it, skip the table path and use the regular non-table path for those lines.
+Implementation: during `rebuild_visual_model()`, check `table_has_diff(block, diff_state)` — if any line in the block range is added or has removals before it, skip the table path and use the regular non-table path for those lines. The `_table_blocks` cache is not modified — `scan_table_blocks` still identifies tables normally. The diff check is a conditional skip at render-time only.
 
 **Mapping impact**:
 - `_spec_to_visual`: unchanged logic — computed after ghost rows are inserted, so it correctly points to the `("spec", i)` row
-- `spec_line_at_visual_row(y)`: for ghost rows, resolve to the nearest spec line. **Never returns `None`** — always resolves to a valid spec line number. This is required because `H`/`M`/`L` key handlers call `max(1, spec_line_at_visual_row(...))` which would crash on `None`. Uses a precomputed `_spec_row_indices: list[int]` (sorted visual row indices of all `("spec", ...)` rows) built during `rebuild_visual_model()`, with `bisect` for `O(log n)` lookup instead of `O(n)` scan.
+- `spec_line_at_visual_row(y)`: for ghost rows, resolve to the **next** spec line (scan forward). Uses a precomputed `_spec_row_indices: list[int]` (sorted visual row indices of all `("spec", ...)` rows) built during `rebuild_visual_model()`, with `bisect_left` for `O(log n)` lookup. Resolution rule: `bisect_left(_spec_row_indices, y)` gives the index of the first spec row at or after `y`. If the result index equals `len(_spec_row_indices)` (ghost rows after the last spec line — trailing removals), fall back to the **last** spec line. **Never returns `None`** — always resolves to a valid spec line number. This is required because `H`/`M`/`L` key handlers call `max(1, spec_line_at_visual_row(...))` which would crash on `None`.
 - `visual_row_for_cursor()`: unchanged — cursor only targets spec lines
 
 ### Rendering
@@ -156,7 +156,8 @@ In `render_line(y)`, the ghost row branch must come **before** the `("spec", ...
 
 **Ghost rows (`diff_removed` / `diff_removed_wrap`)**:
 - Background: `THEME["diff_removed_bg"]` (dark red, `#3b1a1e`)
-- Gutter layout: `[space][space][-][space]` — the `-` goes in the cursor-prefix column (column 0 is space since ghost rows have no cursor), followed by space padding where gutter indicator and line number would be
+- Gutter width: `ghost_gutter_width` equals the spec line `gutter_total` (cursor + gutter icon + line number width) so content columns align perfectly between ghost rows and spec rows
+- Gutter layout: `[space][space][-][padded_spaces]` — column 0 is space (no cursor on ghost rows), column 1 is space (no gutter icon), column 2 is `-` colored `THEME["red"]`, remaining columns are spaces to fill `ghost_gutter_width`. This ensures the `-` marker aligns with the `+` marker on added spec lines (which sits at column 2 in `[cursor][gutter_icon][+][line_num]`)
 - Content rendered as plain text (no markdown styling)
 - Full pager width
 
@@ -291,6 +292,7 @@ Ghost rows are invisible to all navigation and interaction:
 | `revspec/hints.py` | Add `[\d] diff` to `\` pending hints, `[]d] diff` to `]`/`[` pending hints |
 | `revspec/commands.py` | Add `:diff` command alias |
 | `revspec/renderer.py` | Minor — pass diff-added bg to line rendering |
+| `revspec/overlays.py` | Add `\d`, `]d`, `[d` keybindings to help screen |
 | `tests/test_diff_state.py` | **New** — unit tests for DiffState |
 
 ## Out of Scope
