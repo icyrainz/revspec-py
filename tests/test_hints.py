@@ -164,3 +164,30 @@ class TestBuildBottomBar:
         text = build_bottom_bar(thread=t, has_active_message=True)
         # Should show hints, not preview
         assert "preview text" not in text.plain
+
+
+class TestDiffIndicator:
+    def test_top_bar_with_diff_stats(self):
+        text = build_top_bar(
+            file_name="spec.md",
+            threads=[],
+            unread_count=0,
+            cursor_line=1,
+            line_count=10,
+            mtime_changed=False,
+            diff_stats=(5, 3),
+        )
+        plain = text.plain
+        assert "[DIFF +5 -3]" in plain
+
+    def test_top_bar_without_diff_stats(self):
+        text = build_top_bar(
+            file_name="spec.md",
+            threads=[],
+            unread_count=0,
+            cursor_line=1,
+            line_count=10,
+            mtime_changed=False,
+        )
+        plain = text.plain
+        assert "DIFF" not in plain
