@@ -69,10 +69,23 @@ class SpecPager(ScrollView):
         self._cached_gutter_total: int = 3
         self._update_gutter_cache()
 
+    def _is_diff_added(self, spec_idx: int) -> bool:
+        """Check if spec line at 0-based index is a diff-added line."""
+        ds = self.diff_state
+        return ds is not None and ds.is_active and ds.is_added(spec_idx)
+
     def _update_gutter_cache(self) -> None:
         self._cached_num_width, self._cached_gutter_total = gutter_width(
             len(self.state.spec_lines), self.show_line_numbers
         )
+
+    def _append_ghost_rows(self, rows: list[tuple], removed_text: str, content_width: int, ghost_content_width: int) -> None:
+        """Append diff_removed (and optional wrap) rows for a single removed line."""
+        rows.append(("diff_removed", removed_text))
+        if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
+            extra = (len(removed_text) - 1) // ghost_content_width
+            for seg in range(1, extra + 1):
+                rows.append(("diff_removed_wrap", removed_text, seg))
 
     def invalidate_table_cache(self) -> None:
         self._table_blocks = None
@@ -108,11 +121,7 @@ class SpecPager(ScrollView):
             # Ghost rows BEFORE this spec line
             if diff_active:
                 for removed_text in diff.removed_lines_before(i):
-                    rows.append(("diff_removed", removed_text))
-                    if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
-                        extra = (len(removed_text) - 1) // ghost_content_width
-                        for seg in range(1, extra + 1):
-                            rows.append(("diff_removed_wrap", removed_text, seg))
+                    self._append_ghost_rows(rows, removed_text, content_width, ghost_content_width)
 
             table_block = self._table_blocks.get(i)
             # Skip table rendering if table has diffs — render as raw text
@@ -150,11 +159,7 @@ class SpecPager(ScrollView):
         # Trailing removed lines after the last spec line
         if diff_active:
             for removed_text in diff.removed_lines_before(len(lines)):
-                rows.append(("diff_removed", removed_text))
-                if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
-                    extra = (len(removed_text) - 1) // ghost_content_width
-                    for seg in range(1, extra + 1):
-                        rows.append(("diff_removed_wrap", removed_text, seg))
+                self._append_ghost_rows(rows, removed_text, content_width, ghost_content_width)
 
         self._visual_rows = rows
         self._code_state_map = code_state_map
@@ -187,7 +192,7 @@ class SpecPager(ScrollView):
         if kind in ("spec", "spec_wrap", "table_border"):
             return row[1] + 1
         # Ghost row — resolve to next spec line via bisect
-        if not hasattr(self, "_spec_row_indices") or not self._spec_row_indices:
+        if not self._spec_row_indices:
             return self.state.line_count
         pos = bisect_left(self._spec_row_indices, vis_row)
         if pos >= len(self._spec_row_indices):
@@ -294,11 +299,7 @@ class SpecPager(ScrollView):
             is_cursor = line_num == self.cursor_line
             in_code = self._code_state_map.get(spec_idx, False)
             is_fence = line.strip().startswith("```")
-            diff_added = (
-                self.diff_state is not None
-                and self.diff_state.is_active
-                and self.diff_state.is_added(spec_idx)
-            )
+            diff_added = self._is_diff_added(spec_idx)
             if is_cursor:
                 cursor_bg = THEME["panel"]
             elif diff_added:
@@ -332,11 +333,7 @@ class SpecPager(ScrollView):
         thread = self.state.thread_at_line(line_num)
         in_code = self._code_state_map.get(spec_idx, False)
         is_fence = line.strip().startswith("```")
-        diff_added = (
-            self.diff_state is not None
-            and self.diff_state.is_active
-            and self.diff_state.is_added(spec_idx)
-        )
+        diff_added = self._is_diff_added(spec_idx)
         if is_cursor:
             cursor_bg = THEME["panel"]
         elif diff_added:
