@@ -23,12 +23,14 @@ SEQUENCE_REGISTRY: list[KeySequence] = [
     KeySequence("right_square_bracket1", "]1", "h1", "_seq_heading_1_fwd"),
     KeySequence("right_square_bracket2", "]2", "h2", "_seq_heading_2_fwd"),
     KeySequence("right_square_bracket3", "]3", "h3", "_seq_heading_3_fwd"),
+    KeySequence("right_square_bracketd", "]d", "diff→", "_next_hunk"),
     # [ prefix
     KeySequence("left_square_brackett", "[t", "thread", "_seq_prev_thread"),
     KeySequence("left_square_bracketr", "[r", "unread", "_seq_prev_unread"),
     KeySequence("left_square_bracket1", "[1", "h1", "_seq_heading_1_back"),
     KeySequence("left_square_bracket2", "[2", "h2", "_seq_heading_2_back"),
     KeySequence("left_square_bracket3", "[3", "h3", "_seq_heading_3_back"),
+    KeySequence("left_square_bracketd", "[d", "←diff", "_prev_hunk"),
     # g prefix
     KeySequence("gg", "gg", "top", "_seq_go_top"),
     # z prefix
@@ -40,6 +42,7 @@ SEQUENCE_REGISTRY: list[KeySequence] = [
     # \ prefix
     KeySequence("backslashw", "\\w", "wrap", "_toggle_wrap"),
     KeySequence("backslashn", "\\n", "lines", "_toggle_line_numbers"),
+    KeySequence("backslashd", "\\d", "diff", "_toggle_diff"),
 ]
 
 # Known prefix names for deriving prefix → hint mappings

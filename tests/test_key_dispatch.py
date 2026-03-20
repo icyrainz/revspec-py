@@ -118,8 +118,8 @@ class TestHintsForPrefix:
 
 
 class TestRegistryCompleteness:
-    def test_all_16_entries(self):
-        assert len(SEQUENCE_REGISTRY) == 16
+    def test_all_19_entries(self):
+        assert len(SEQUENCE_REGISTRY) == 19
 
     def test_all_entries_have_handler(self):
         for entry in SEQUENCE_REGISTRY:
@@ -128,3 +128,29 @@ class TestRegistryCompleteness:
     def test_no_duplicate_seq_keys(self):
         keys = [e.seq_key for e in SEQUENCE_REGISTRY]
         assert len(keys) == len(set(keys))
+
+
+class TestDiffSequences:
+    def test_toggle_diff_resolves(self):
+        router = SequenceRouter()
+        assert router.resolve("backslash", "d") == "_toggle_diff"
+
+    def test_next_hunk_resolves(self):
+        router = SequenceRouter()
+        assert router.resolve("right_square_bracket", "d") == "_next_hunk"
+
+    def test_prev_hunk_resolves(self):
+        router = SequenceRouter()
+        assert router.resolve("left_square_bracket", "d") == "_prev_hunk"
+
+    def test_backslash_hints_include_diff(self):
+        router = SequenceRouter()
+        hints = router.hints_for_prefix("backslash")
+        displays = [h[0] for h in hints]
+        assert "\\d" in displays
+
+    def test_bracket_hints_include_diff(self):
+        router = SequenceRouter()
+        hints = router.hints_for_prefix("right_square_bracket")
+        displays = [h[0] for h in hints]
+        assert "]d" in displays
