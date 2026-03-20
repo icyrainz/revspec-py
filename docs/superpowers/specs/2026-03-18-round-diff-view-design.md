@@ -295,6 +295,20 @@ Ghost rows are invisible to all navigation and interaction:
 | `revspec/overlays.py` | Add `\d`, `]d`, `[d` keybindings to help screen |
 | `tests/test_diff_state.py` | **New** — unit tests for DiffState |
 
+## Architectural Debt (from review panel)
+
+Documented during 4 rounds of review panel. None are blocking — all are improvement candidates for a future refactoring pass.
+
+1. **`render_line` is ~170 lines with 5 row-type branches** — `table_border`, `diff_removed`, `diff_removed_wrap`, `spec_wrap`, `spec`. Each branch is a self-contained renderer. Extracting per-type helpers (`_render_ghost_row`, `_render_spec_wrap`, etc.) would reduce `render_line` to a dispatch router. Flagged by Fowler and Ousterhout across rounds 1-4.
+
+2. **DiffState dual-ownership** — `app._diff_state` and `pager.diff_state` are two references to the same object, manually synced in `_do_reload`, `_toggle_diff`, and `_exit_tui`. A single owner (app) passing the reference once, or pager querying via callback, would eliminate the coordination obligation. Flagged by Ousterhout and Grug across rounds 1-4.
+
+3. **Asymmetric diff-active abstraction** — `rebuild_visual_model` checks `diff_active = diff is not None and diff.is_active` inline, while `render_line` delegates to `_is_diff_added()` and `_line_bg()`. Both encode the same "is diff active?" guard at different abstraction levels. A single `_is_diff_active` property or consistent delegation pattern would unify them. Flagged by Ousterhout and Fowler in rounds 2-4.
+
+4. **`len()` vs `cell_len` for CJK/emoji in ghost row wrapping** — Ghost row wrap uses `len(removed_text)` (character count) but terminal rendering uses cell width. CJK/double-width characters would cause misaligned wrap points. The existing spec-line wrapping has the same issue (`len(line)` at `rebuild_visual_model`). Both should use `display_width()` from `markdown.py`. Flagged by Carmack, Beck, and Schneier in round 1.
+
+5. **`affects_range` uses O(n) loop** — Iterates `range(start, count)` with two dict/set lookups per index. Could use `bisect` on `_hunk_starts` for O(log n). Not a practical issue for typical small markdown tables but inconsistent with the bisect approach in `next_hunk`/`prev_hunk`. Flagged by Grug, Carmack, and Ousterhout in rounds 2-3.
+
 ## Out of Scope
 
 - Side-by-side diff view (future enhancement)
