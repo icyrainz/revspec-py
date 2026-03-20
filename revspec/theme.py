@@ -25,6 +25,8 @@ THEME = {
     "warning": "#f9e2af",
     "error": "#f38ba8",
     "info": "#89b4fa",
+    "diff_added_bg": "#1a3b1e",    # subtle dark green background
+    "diff_removed_bg": "#3b1a1e",  # subtle dark red background
 }
 
 STATUS_ICONS = {
