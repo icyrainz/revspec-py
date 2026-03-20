@@ -131,6 +131,19 @@ class Message:
     ts: int | None = None
 
 
+def slice_to_current_session(events: list[LiveEvent]) -> list[LiveEvent]:
+    """Return only events from the most recent session.
+
+    Slices at the last ``session-start`` marker. If none exists,
+    returns all events (backwards compatibility).
+    """
+    last_ss = max(
+        (i for i, e in enumerate(events) if e.type == "session-start"),
+        default=-1,
+    )
+    return events[last_ss + 1:]
+
+
 def replay_events_to_threads(events: list[LiveEvent]) -> list[Thread]:
     threads: dict[str, Thread] = {}
     order: list[str] = []

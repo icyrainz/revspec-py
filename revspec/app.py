@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.style import Style
 
 from .state import ReviewState
-from .protocol import LiveEvent, Message, append_event, read_events, replay_events_to_threads
+from .protocol import LiveEvent, Message, append_event, read_events, replay_events_to_threads, slice_to_current_session
 from .theme import THEME
 from .commands import parse_command
 from .hints import build_hints, build_top_bar, build_bottom_bar
@@ -73,10 +73,10 @@ class RevspecApp(App):
         base = Path(spec_file)
         self.jsonl_path = str(base.parent / (base.stem + ".review.jsonl"))
 
-        # Replay existing events
+        # Replay existing events — only from the current session
         if os.path.exists(self.jsonl_path):
             events, _ = read_events(self.jsonl_path)
-            for t in replay_events_to_threads(events):
+            for t in replay_events_to_threads(slice_to_current_session(events)):
                 existing = self.state._find_thread(t.id)
                 if not existing:
                     self.state.threads.append(t)
@@ -149,10 +149,10 @@ class RevspecApp(App):
         old_lines = list(self.state.spec_lines)
         new_lines = new_content.split("\n")
         self.state.reset(new_lines)
-        # Re-replay JSONL to restore thread state
+        # Re-replay JSONL to restore thread state (current session only)
         if os.path.exists(self.jsonl_path):
             events, _ = read_events(self.jsonl_path)
-            for t in replay_events_to_threads(events):
+            for t in replay_events_to_threads(slice_to_current_session(events)):
                 self.state.threads.append(t)
                 self.state._thread_by_id[t.id] = t
                 self.state._thread_by_line[t.line] = t

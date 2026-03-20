@@ -4,7 +4,7 @@ import os
 
 from revspec.protocol import (
     LiveEvent, append_event, read_events, replay_events_to_threads,
-    Thread, Message,
+    slice_to_current_session, Thread, Message,
 )
 from revspec.markdown import _word_wrap_count
 from revspec.comment_screen import CommentScreen, _render_hints
@@ -543,3 +543,102 @@ class TestReloadPreservesThreads:
             state.threads.append(t)
 
         assert len(state.threads) == 0
+
+
+class TestSessionBoundaryReplay:
+    """Bug fix: resolved threads from previous sessions should not appear
+    in new sessions. The JSONL replay must slice at the last session-start."""
+
+    def _replay_current_session(self, events):
+        """Slice to current session and replay — uses production logic."""
+        return replay_events_to_threads(slice_to_current_session(events))
+
+    def test_previous_session_threads_not_replayed(self, tmp_path):
+        jsonl = tmp_path / "test.review.jsonl"
+        # Session 1: comment + resolve + session-end
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=5, text="Old comment"))
+        append_event(str(jsonl), LiveEvent(type="resolve", author="reviewer", ts=2000,
+                                           thread_id="t1"))
+        append_event(str(jsonl), LiveEvent(type="session-end", author="reviewer", ts=3000))
+        # Session 2 starts
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=4000))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 0  # t1 from session 1 should not appear
+
+    def test_current_session_threads_replayed(self, tmp_path):
+        jsonl = tmp_path / "test.review.jsonl"
+        # Session 1
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=5, text="Old"))
+        append_event(str(jsonl), LiveEvent(type="session-end", author="reviewer", ts=2000))
+        # Session 2
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=3000))
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=4000,
+                                           thread_id="t2", line=10, text="New"))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 1
+        assert threads[0].id == "t2"
+
+    def test_no_session_start_replays_everything(self, tmp_path):
+        """Backwards compat: if no session-start exists, replay all events."""
+        jsonl = tmp_path / "test.review.jsonl"
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=5, text="A"))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 1
+
+    def test_approved_session_threads_not_replayed(self, tmp_path):
+        jsonl = tmp_path / "test.review.jsonl"
+        # Session 1: comment + approve
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=5, text="Looks good"))
+        append_event(str(jsonl), LiveEvent(type="approve", author="reviewer", ts=2000))
+        # Session 2
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=3000))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 0
+
+    def test_multiple_session_starts_uses_last(self, tmp_path):
+        """With 3 sessions, only the last session's threads appear."""
+        jsonl = tmp_path / "test.review.jsonl"
+        # Session 1
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=1, text="S1"))
+        append_event(str(jsonl), LiveEvent(type="session-end", author="reviewer", ts=2000))
+        # Session 2
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=3000))
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=4000,
+                                           thread_id="t2", line=2, text="S2"))
+        append_event(str(jsonl), LiveEvent(type="session-end", author="reviewer", ts=5000))
+        # Session 3
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=6000))
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=7000,
+                                           thread_id="t3", line=3, text="S3"))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 1
+        assert threads[0].id == "t3"
+
+    def test_unresolved_thread_from_prior_session_not_replayed(self, tmp_path):
+        """Unresolved threads from prior sessions are dropped — clean slate per session."""
+        jsonl = tmp_path / "test.review.jsonl"
+        # Session 1: unresolved thread
+        append_event(str(jsonl), LiveEvent(type="comment", author="reviewer", ts=1000,
+                                           thread_id="t1", line=5, text="Not resolved"))
+        append_event(str(jsonl), LiveEvent(type="session-end", author="reviewer", ts=2000))
+        # Session 2
+        append_event(str(jsonl), LiveEvent(type="session-start", author="reviewer", ts=3000))
+
+        events, _ = read_events(str(jsonl))
+        threads = self._replay_current_session(events)
+        assert len(threads) == 0  # clean slate
