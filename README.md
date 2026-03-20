@@ -94,6 +94,17 @@ Sends an AI reply that appears instantly in the reviewer's TUI.
 8. Repeat 3-7 until A (approve)
 ```
 
+## Round Diff View
+
+After each submit/rewrite cycle, the TUI shows an inline unified diff of what changed:
+
+- **Red ghost rows** with `-` prefix for removed lines
+- **Green-tinted rows** with `+` prefix for added/changed lines
+- **`[DIFF +N -M]`** indicator in the top bar showing change counts
+- Toggle with `\d`, navigate hunks with `]d`/`[d`
+
+The diff auto-appears on reload and persists until approve. Each round diffs against the immediately previous version.
+
 ## Markdown rendering
 
 Revspec renders markdown in-place:
@@ -113,7 +124,7 @@ just test             # Unit + integration (pytest)
 just pytest-watch     # Watch mode
 ```
 
-391 tests covering state, protocol, markdown, watch, reply, renderer, and bugfixes.
+432 tests covering state, protocol, markdown, watch, reply, renderer, diff_state, and bugfixes.
 
 ## Protocol
 
@@ -127,10 +138,11 @@ Communication happens through a JSONL file (`spec.review.jsonl`) — append-only
 {"type":"resolve","threadId":"x1a3f","author":"reviewer","ts":1710400010}
 {"type":"submit","author":"reviewer","ts":1710400050}
 {"type":"approve","author":"reviewer","ts":1710400060}
+{"type":"session-start","author":"reviewer","ts":1710400065}
 {"type":"session-end","author":"reviewer","ts":1710400070}
 ```
 
-The `submit` event acts as a round delimiter — the AI rewrites the spec, and the TUI reloads. Events before a `submit` reference the previous spec version.
+The `submit` event acts as a round delimiter — the AI rewrites the spec, and the TUI reloads. Events before a `submit` reference the previous spec version. The `session-start` event marks where a new review session begins — only events after the last `session-start` are replayed on startup.
 
 Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting reviewer), `resolved`, `outdated`.
 
@@ -150,6 +162,7 @@ Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting rev
 | `Esc` | Clear search highlights |
 | `]t/[t` | Next/prev thread |
 | `]r/[r` | Next/prev unread AI reply |
+| `]d/[d` | Next/prev diff hunk |
 | `]1/[1` | Next/prev h1 heading |
 | `]2/[2` | Next/prev h2 heading |
 | `]3/[3` | Next/prev h3 heading |
@@ -174,6 +187,7 @@ Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting rev
 |-----|--------|
 | `\w` | Toggle line wrapping |
 | `\n` | Toggle line numbers |
+| `\d` | Toggle diff view |
 
 **Commands**
 
@@ -183,6 +197,7 @@ Thread statuses: `open` (awaiting AI reply), `pending` (AI replied, awaiting rev
 | `:q!` | Force quit (also `:wq!`, `:qa!`, etc.) |
 | `:{N}` | Jump to line N |
 | `:wrap` | Toggle line wrapping |
+| `:diff` | Toggle diff view |
 | `:submit` | Submit for rewrite |
 | `:approve` | Approve spec |
 | `:resolve` | Resolve thread |
