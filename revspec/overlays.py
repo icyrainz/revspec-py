@@ -407,6 +407,7 @@ class HelpScreen(ModalScreen[None]):
   ]3/\\[3        Next/prev h3 heading
   Ctrl+O/I     Jump list back/forward
   ''           Jump to previous position
+  ]d/\\[d        Next/prev diff hunk
   H/M/L        Screen top/middle/bottom
 
 [bold]Review[/]
@@ -421,6 +422,7 @@ class HelpScreen(ModalScreen[None]):
 [bold]Toggles[/]
   \\w           Toggle line wrapping
   \\n           Toggle line numbers
+  \\d           Toggle diff view
 
 [bold]Other[/]
   Ctrl+R       Reload spec
@@ -431,6 +433,7 @@ class HelpScreen(ModalScreen[None]):
   :q!          Force quit
   :{{N}}         Jump to line N
   :wrap        Toggle line wrapping
+  :diff        Toggle diff view (same as \\d)
   :submit      Submit for rewrite (same as S)
   :approve     Approve spec (same as A)
   :resolve     Resolve thread (same as r)
