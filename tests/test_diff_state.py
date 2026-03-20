@@ -123,3 +123,27 @@ class TestAutojunkDisabled:
         assert ds.is_added(1) is False
         assert ds.is_added(3) is False
         assert ds.is_added(4) is False
+
+
+class TestGhostRowInterleaving:
+    """Test DiffState contract for ghost row sequences."""
+
+    def test_removed_line_produces_ghost_before_next(self):
+        ds = DiffState(["a", "b", "c"], ["a", "c"])
+        assert ds.removed_lines_before(1) == ["b"]
+        assert ds.removed_lines_before(0) == []
+
+    def test_replace_produces_ghost_and_added(self):
+        ds = DiffState(["a", "old", "c"], ["a", "new", "c"])
+        assert ds.removed_lines_before(1) == ["old"]
+        assert ds.is_added(1) is True
+
+    def test_trailing_removal_uses_len_key(self):
+        ds = DiffState(["a", "b", "c"], ["a"])
+        assert ds.removed_lines_before(1) == ["b", "c"]
+
+    def test_no_ghost_rows_when_inactive(self):
+        ds = DiffState(["a", "b", "c"], ["a", "c"])
+        ds.toggle()
+        assert ds.removed_lines_before(1) == ["b"]
+        assert ds.is_active is False

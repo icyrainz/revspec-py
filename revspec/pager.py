@@ -10,7 +10,9 @@ from rich.text import Text
 from rich.style import Style
 from rich.console import Console
 
+from bisect import bisect_left
 from .state import ReviewState
+from .diff_state import DiffState
 from .theme import THEME, status_icon, status_color
 from .renderer import (
     HEADING_RE, line_style, is_block_element, append_line_content,
@@ -20,6 +22,14 @@ from .markdown import (
     scan_table_blocks, render_table_border, render_table_separator,
     render_table_row, parse_table_cells, TableBlock,
 )
+
+
+def _table_has_diff(block: TableBlock, diff_state: DiffState) -> bool:
+    """Check if any line in a table block has diff changes."""
+    for idx in range(block.start_index, block.start_index + len(block.lines)):
+        if diff_state.is_added(idx) or diff_state.removed_lines_before(idx):
+            return True
+    return False
 
 
 class SpecPager(ScrollView):
@@ -52,6 +62,8 @@ class SpecPager(ScrollView):
         self._visual_rows: list[tuple] = []
         self._code_state_map: dict[int, bool] = {}
         self._spec_to_visual: dict[int, int] = {}
+        self._spec_row_indices: list[int] = []
+        self.diff_state: DiffState | None = None
         self._rich_console = Console(width=200, no_color=False)
         self._cached_num_width: int = 0
         self._cached_gutter_total: int = 3
@@ -76,16 +88,39 @@ class SpecPager(ScrollView):
         gutter_total = self._cached_gutter_total
         content_width = width - gutter_total if self.wrap_width > 0 else 0
 
+        diff = self.diff_state
+        diff_active = diff is not None and diff.is_active
+
+        # Ghost row gutter width matches spec gutter for column alignment
+        ghost_gutter_width = gutter_total
+        ghost_content_width = width - ghost_gutter_width
+
         rows: list[tuple] = []
         in_code = False
         code_state_map: dict[int, bool] = {}
         spec_to_vis: dict[int, int] = {}
+        spec_row_indices: list[int] = []
         i = 0
 
         while i < len(lines):
             line = lines[i]
+
+            # Ghost rows BEFORE this spec line
+            if diff_active:
+                for removed_text in diff.removed_lines_before(i):
+                    rows.append(("diff_removed", removed_text))
+                    if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
+                        extra = (len(removed_text) - 1) // ghost_content_width
+                        for seg in range(1, extra + 1):
+                            rows.append(("diff_removed_wrap", removed_text, seg))
+
             table_block = self._table_blocks.get(i)
-            is_table = table_block is not None and not self.search_query
+            # Skip table rendering if table has diffs — render as raw text
+            is_table = (
+                table_block is not None
+                and not self.search_query
+                and not (diff_active and _table_has_diff(table_block, diff))
+            )
 
             code_state_map[i] = in_code
 
@@ -97,11 +132,13 @@ class SpecPager(ScrollView):
                 if rel_idx == 0:
                     rows.append(("table_border", i, "top"))
                 spec_to_vis[i + 1] = len(rows)
+                spec_row_indices.append(len(rows))
                 rows.append(("spec", i))
                 if rel_idx == len(table_block.lines) - 1:
                     rows.append(("table_border", i, "bottom"))
             else:
                 spec_to_vis[i + 1] = len(rows)
+                spec_row_indices.append(len(rows))
                 rows.append(("spec", i))
                 if content_width > 0 and len(line) > content_width:
                     extra = (len(line) - 1) // content_width
@@ -110,9 +147,19 @@ class SpecPager(ScrollView):
 
             i += 1
 
+        # Trailing removed lines after the last spec line
+        if diff_active:
+            for removed_text in diff.removed_lines_before(len(lines)):
+                rows.append(("diff_removed", removed_text))
+                if content_width > 0 and ghost_content_width > 0 and len(removed_text) > ghost_content_width:
+                    extra = (len(removed_text) - 1) // ghost_content_width
+                    for seg in range(1, extra + 1):
+                        rows.append(("diff_removed_wrap", removed_text, seg))
+
         self._visual_rows = rows
         self._code_state_map = code_state_map
         self._spec_to_visual = spec_to_vis
+        self._spec_row_indices = spec_row_indices
         self.virtual_size = Size(width, len(rows))
 
     def refresh_content(self) -> None:
@@ -130,12 +177,23 @@ class SpecPager(ScrollView):
         return self._spec_to_visual.get(self.cursor_line, self.cursor_line - 1)
 
     def spec_line_at_visual_row(self, vis_row: int) -> int:
+        """Map visual row to spec line (1-based). Resolves ghost rows forward."""
         if vis_row < 0:
             return 1
         if vis_row >= len(self._visual_rows):
             return self.state.line_count
         row = self._visual_rows[vis_row]
-        return row[1] + 1
+        kind = row[0]
+        if kind in ("spec", "spec_wrap", "table_border"):
+            return row[1] + 1
+        # Ghost row — resolve to next spec line via bisect
+        if not hasattr(self, "_spec_row_indices") or not self._spec_row_indices:
+            return self.state.line_count
+        pos = bisect_left(self._spec_row_indices, vis_row)
+        if pos >= len(self._spec_row_indices):
+            return self.state.line_count  # trailing ghost rows → last spec line
+        spec_vis = self._spec_row_indices[pos]
+        return self._visual_rows[spec_vis][1] + 1
 
     def scroll_cursor_visible(self, center: bool = False, margin: int = 0) -> None:
         vis_row = self.visual_row_for_cursor()
