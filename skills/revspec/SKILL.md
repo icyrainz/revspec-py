@@ -124,9 +124,11 @@ Rewrite the spec incorporating the above, then run: revspec watch spec.md
 ```
 
 1. Read the current spec and compare against the resolved threads
-2. If changes are needed: rewrite the spec and save — this triggers the TUI to reload automatically
+2. If changes are needed: apply ALL changes and write the entire file in **one atomic Write** — do NOT use multiple Edit calls, as each file change triggers a TUI reload prompt. Read the full file, apply all resolved thread changes, then use the Write tool once.
 3. If the spec already reflects the feedback (e.g., crash recovery): skip rewrite
 4. Run `revspec watch` again — the reviewer is still in the TUI and will see the new content
+
+**Critical:** Always rewrite the spec in a single Write operation. Multiple file writes cause multiple reload prompts in the TUI, confusing the reviewer.
 
 **Important:** Watch may re-output the submit summary on crash recovery. Always verify whether the spec already incorporates the feedback before rewriting.
 
