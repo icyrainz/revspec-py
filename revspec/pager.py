@@ -247,6 +247,46 @@ class SpecPager(ScrollView):
                 render_table_border(text, table_block.col_widths, position)
             return self._make_strip(text, width)
 
+        # --- Ghost rows (diff removed) ---
+        if row[0] == "diff_removed":
+            removed_text = row[1]
+            bg = THEME["diff_removed_bg"]
+            text = Text()
+            # Gutter: [space][space][-][padding] — same width as spec gutter
+            text.append(" ", Style(bgcolor=bg))  # cursor column
+            text.append(" ", Style(bgcolor=bg))  # gutter icon column
+            text.append("-", Style(color=THEME["red"], bgcolor=bg))
+            if self.show_line_numbers:
+                text.append(" " * (num_width + 1), Style(bgcolor=bg))
+            content = removed_text if removed_text else " "
+            if self.wrap_width > 0:
+                ghost_cw = width - gutter_total
+                if ghost_cw > 0 and len(content) > ghost_cw:
+                    content = content[:ghost_cw]
+            text.append(content, Style(color=THEME["text_dim"], bgcolor=bg))
+            # Pad with diff bg (not default crust) so the full row is tinted
+            pad = width - text.cell_len
+            if pad > 0:
+                text.append(" " * pad, Style(bgcolor=bg))
+            return Strip(list(text.render(self._rich_console))).crop(0, width)
+
+        if row[0] == "diff_removed_wrap":
+            removed_text = row[1]
+            seg = row[2]
+            bg = THEME["diff_removed_bg"]
+            ghost_cw = width - gutter_total
+            start = seg * ghost_cw
+            end = start + ghost_cw
+            segment_text = removed_text[start:end]
+            text = Text()
+            text.append(" " * gutter_total, Style(bgcolor=bg))
+            text.append(segment_text, Style(color=THEME["text_dim"], bgcolor=bg))
+            # Pad with diff bg
+            pad = width - text.cell_len
+            if pad > 0:
+                text.append(" " * pad, Style(bgcolor=bg))
+            return Strip(list(text.render(self._rich_console))).crop(0, width)
+
         if row[0] == "spec_wrap":
             _kind, spec_idx, seg = row
             line = lines[spec_idx]
@@ -254,8 +294,15 @@ class SpecPager(ScrollView):
             is_cursor = line_num == self.cursor_line
             in_code = self._code_state_map.get(spec_idx, False)
             is_fence = line.strip().startswith("```")
+            diff_added = (
+                self.diff_state is not None
+                and self.diff_state.is_active
+                and self.diff_state.is_added(spec_idx)
+            )
             if is_cursor:
                 cursor_bg = THEME["panel"]
+            elif diff_added:
+                cursor_bg = THEME["diff_added_bg"]
             elif in_code or is_fence:
                 cursor_bg = THEME["mantle"]
             else:
@@ -285,8 +332,15 @@ class SpecPager(ScrollView):
         thread = self.state.thread_at_line(line_num)
         in_code = self._code_state_map.get(spec_idx, False)
         is_fence = line.strip().startswith("```")
+        diff_added = (
+            self.diff_state is not None
+            and self.diff_state.is_active
+            and self.diff_state.is_added(spec_idx)
+        )
         if is_cursor:
             cursor_bg = THEME["panel"]
+        elif diff_added:
+            cursor_bg = THEME["diff_added_bg"]
         elif in_code or is_fence:
             cursor_bg = THEME["mantle"]
         else:
@@ -310,12 +364,20 @@ class SpecPager(ScrollView):
         else:
             text.append(" ", Style(bgcolor=cursor_bg))
 
-        # Line number
+        # Line number (with + marker for diff-added lines)
         if self.show_line_numbers:
-            num_str = f"{line_num:>{num_width}}  "
-            text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
+            if diff_added:
+                num_str = f"{line_num:>{num_width}} "
+                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
+                text.append("+", Style(color=THEME["green"], bgcolor=cursor_bg))
+            else:
+                num_str = f"{line_num:>{num_width}}  "
+                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
         else:
-            text.append(" ", Style(bgcolor=cursor_bg))
+            if diff_added:
+                text.append("+", Style(color=THEME["green"], bgcolor=cursor_bg))
+            else:
+                text.append(" ", Style(bgcolor=cursor_bg))
 
         # Content
         if is_table:
