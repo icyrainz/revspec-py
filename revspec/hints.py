@@ -47,6 +47,7 @@ def build_top_bar(
     line_count: int,
     breadcrumb: str | None = None,
     mtime_changed: bool,
+    diff_stats: tuple[int, int] | None = None,
 ) -> Text:
     """Build the top status bar text."""
     text = Text()
@@ -75,6 +76,12 @@ def build_top_bar(
             "!! Spec changed externally (Ctrl+R to reload)",
             Style(color=THEME["red"], bold=True),
         )
+
+    # Diff indicator
+    if diff_stats is not None:
+        added, removed = diff_stats
+        text.append("  \u00b7  ", Style(color=THEME["text_dim"]))
+        text.append(f"[DIFF +{added} -{removed}]", Style(color=THEME["green"], bold=True))
 
     # Position
     cur = cursor_line

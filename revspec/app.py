@@ -21,6 +21,7 @@ from .hints import build_hints, build_top_bar, build_bottom_bar
 from .key_dispatch import SequenceRouter
 from .navigation import JumpList, HeadingIndex
 from .pager import SpecPager
+from .diff_state import DiffState
 from .renderer import smartcase_prepare
 from .overlays import (
     SearchScreen, ConfirmScreen, ThreadListScreen,
@@ -116,6 +117,7 @@ class RevspecApp(App):
         # Spec mutation guard
         self._spec_mtime = Path(spec_file).stat().st_mtime
         self._spec_mtime_changed = False
+        self._diff_state: DiffState | None = None
 
         # Submit flow
         self._spec_poll_timer = None
@@ -144,7 +146,9 @@ class RevspecApp(App):
 
     def _do_reload(self, new_content: str, new_mtime: float) -> None:
         """Shared reload logic — reset state, re-replay JSONL, reset UI."""
-        self.state.reset(new_content.split("\n"))
+        old_lines = list(self.state.spec_lines)
+        new_lines = new_content.split("\n")
+        self.state.reset(new_lines)
         # Re-replay JSONL to restore thread state
         if os.path.exists(self.jsonl_path):
             events, _ = read_events(self.jsonl_path)
@@ -156,10 +160,18 @@ class RevspecApp(App):
         self._spec_mtime_changed = False
         self.search_query = None
         self._jump_list = JumpList()
-        self._heading_index.rebuild(new_content.split("\n"))
+        self._heading_index.rebuild(new_lines)
         if self.pager_widget:
             self.pager_widget.invalidate_table_cache()
         self._watcher_service.init_offset()
+        # Compute diff between old and new spec
+        diff = DiffState(old_lines, new_lines)
+        if diff.has_diff():
+            self._diff_state = diff
+        else:
+            self._diff_state = None
+        if self.pager_widget:
+            self.pager_widget.diff_state = self._diff_state
 
     def _check_spec_reload(self) -> None:
         """Poll spec file mtime for reload after submit."""
@@ -260,6 +272,7 @@ class RevspecApp(App):
             line_count=self.state.line_count,
             breadcrumb=self._heading_index.breadcrumb(self.state.cursor_line),
             mtime_changed=self._spec_mtime_changed,
+            diff_stats=self._diff_state.stats if self._diff_state and self._diff_state.is_active else None,
         )
 
     @staticmethod
@@ -573,6 +586,38 @@ class RevspecApp(App):
         else:
             self._show_transient("No unread replies")
 
+    def _next_hunk(self) -> None:
+        if self._diff_state is None or not self._diff_state.has_diff():
+            self._show_transient("No diff available", "warning")
+            return
+        target = self._diff_state.next_hunk(self.state.cursor_line)
+        if target is None:
+            target = self._diff_state.next_hunk(0)
+            if target is None:
+                return
+            self._show_transient("Wrapped to first change", "info", 1.2)
+        self._push_jump()
+        self.state.cursor_line = target
+        self._refresh()
+        if not self._diff_state.is_added(target - 1):
+            self._show_transient("Deletion above", "info", 1.2)
+
+    def _prev_hunk(self) -> None:
+        if self._diff_state is None or not self._diff_state.has_diff():
+            self._show_transient("No diff available", "warning")
+            return
+        target = self._diff_state.prev_hunk(self.state.cursor_line)
+        if target is None:
+            target = self._diff_state.prev_hunk(self.state.line_count + 1)
+            if target is None:
+                return
+            self._show_transient("Wrapped to last change", "info", 1.2)
+        self._push_jump()
+        self.state.cursor_line = target
+        self._refresh()
+        if not self._diff_state.is_added(target - 1):
+            self._show_transient("Deletion above", "info", 1.2)
+
     def _seq_heading_1_fwd(self) -> None:
         self._jump_heading(1, forward=True)
 
@@ -606,6 +651,16 @@ class RevspecApp(App):
         self._refresh()
         show = self.pager_widget.show_line_numbers if self.pager_widget else True
         self._show_transient(f"Line numbers {'on' if show else 'off'}", "info")
+
+    def _toggle_diff(self) -> None:
+        if self._diff_state is None:
+            self._show_transient("No diff available", "warning")
+            return
+        active = self._diff_state.toggle()
+        if self.pager_widget:
+            self.pager_widget.diff_state = self._diff_state
+            self.pager_widget.refresh_content()
+        self._show_transient(f"Diff view {'on' if active else 'off'}")
 
     def _jump_heading(self, level: int, forward: bool) -> None:
         line = (self._heading_index.next_heading(level, self.state.cursor_line)
@@ -906,6 +961,8 @@ class RevspecApp(App):
             self._reload_spec()
         elif result.action == "wrap":
             self._toggle_wrap()
+        elif result.action == "diff":
+            self._toggle_diff()
         elif result.action == "goto":
             self._push_jump()
             self.state.cursor_line = min(result.args["line"], self.state.line_count)
@@ -925,6 +982,9 @@ class RevspecApp(App):
                 offset_path.unlink(missing_ok=True)
             except OSError:
                 pass
+        self._diff_state = None
+        if self.pager_widget:
+            self.pager_widget.diff_state = None
         self.exit()
 
     def action_help(self) -> None:
