@@ -262,7 +262,7 @@ def _format_submit_output(resolved_threads, spec_path):
             if owner_msgs:
                 lines.append(f"    \u2192 AI: \"{'; '.join(m.text for m in owner_msgs)}\"")
         lines.append("")
-    lines.append(f"Rewrite the spec incorporating the above, then run: revspec watch {spec_path}")
+    lines.append(f"Rewrite the spec incorporating the above in a single atomic write (one Write tool call), then run: revspec watch {spec_path}")
     lines.append("")
     return "\n".join(lines)
 

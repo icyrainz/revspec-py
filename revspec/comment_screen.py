@@ -68,7 +68,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         height: 80%;
         border: solid #89b4fa;
         background: #313244;
-        padding: 1 2;
+        padding: 1 1 0 1;
         border-title-align: left;
         border-title-color: #89b4fa;
     }
@@ -91,8 +91,8 @@ class CommentScreen(ModalScreen[CommentResult]):
         margin: 0;
     }
     #comment-input {
-        height: 4;
-        min-height: 4;
+        height: 1;
+        min-height: 1;
         border: none;
     }
     #comment-context {
@@ -102,6 +102,7 @@ class CommentScreen(ModalScreen[CommentResult]):
     }
     #comment-hints {
         height: 1;
+        margin-top: 1;
     }
     """
 

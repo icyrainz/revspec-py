@@ -78,6 +78,14 @@ class SpecPager(ScrollView):
             return THEME["mantle"]
         return THEME["crust"]
 
+    def _gutter_bg(self, spec_idx: int, is_cursor: bool) -> str | None:
+        """Background for gutter/line-number — same as _line_bg but ignores code blocks."""
+        if is_cursor:
+            return THEME["panel"]
+        if self._is_diff_added(spec_idx):
+            return THEME["diff_added_bg"]
+        return THEME["crust"]
+
     def _update_gutter_cache(self) -> None:
         self._cached_num_width, self._cached_gutter_total = gutter_width(
             len(self.state.spec_lines), self.show_line_numbers
@@ -305,7 +313,8 @@ class SpecPager(ScrollView):
             segment_text = line[start:end]
 
             text = Text()
-            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=cursor_bg))
+            g_bg = self._gutter_bg(spec_idx, is_cursor)
+            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=g_bg))
             if not in_code and line.lstrip().startswith("> "):
                 text.append(
                     segment_text,
@@ -326,6 +335,7 @@ class SpecPager(ScrollView):
         is_fence = line.strip().startswith("```")
         diff_added = self._is_diff_added(spec_idx)
         cursor_bg = self._line_bg(spec_idx, is_cursor)
+        g_bg = self._gutter_bg(spec_idx, is_cursor)
 
         table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
         is_table = table_block is not None and not self.search_query
@@ -336,29 +346,29 @@ class SpecPager(ScrollView):
         # Cursor prefix
         prefix = ">" if is_cursor else " "
         prefix_color = THEME["mauve"] if is_cursor else THEME["text_dim"]
-        text.append(prefix, Style(color=prefix_color, bgcolor=cursor_bg))
+        text.append(prefix, Style(color=prefix_color, bgcolor=g_bg))
 
         # Gutter indicator
         if thread:
             color = status_color(thread.status, self.state.is_unread(thread.id))
-            text.append(status_icon(thread.status), Style(color=color, bgcolor=cursor_bg))
+            text.append(status_icon(thread.status), Style(color=color, bgcolor=g_bg))
         else:
-            text.append(" ", Style(bgcolor=cursor_bg))
+            text.append(" ", Style(bgcolor=g_bg))
 
         # Line number (with + marker for diff-added lines)
         if self.show_line_numbers:
             if diff_added:
                 num_str = f"{line_num:>{num_width}} "
-                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
-                text.append("+", Style(color=THEME["green"], bgcolor=cursor_bg))
+                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=g_bg))
+                text.append("+", Style(color=THEME["green"], bgcolor=g_bg))
             else:
                 num_str = f"{line_num:>{num_width}}  "
-                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=cursor_bg))
+                text.append(num_str, Style(color=THEME["text_dim"], dim=True, bgcolor=g_bg))
         else:
             if diff_added:
-                text.append("+", Style(color=THEME["green"], bgcolor=cursor_bg))
+                text.append("+", Style(color=THEME["green"], bgcolor=g_bg))
             else:
-                text.append(" ", Style(bgcolor=cursor_bg))
+                text.append(" ", Style(bgcolor=g_bg))
 
         # Content
         if is_table:
