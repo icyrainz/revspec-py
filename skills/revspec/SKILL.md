@@ -147,9 +147,9 @@ The spec is finalized. Report: "Spec approved and finalized at `<spec-file>`. Re
 
 ## Thread Status Meanings
 
-- **Open** — under discussion, AI replied, reviewer hasn't responded yet
-- **Pending** — owner replied, waiting for reviewer to read
-- **Resolved** — reviewer acknowledged the plan, AI should make the change
+- **Open** — reviewer commented or replied, awaiting AI response
+- **Pending** — AI replied, waiting for reviewer to read
+- **Resolved** — reviewer acknowledged, AI should incorporate the change on submit
 
 ## Loop Summary
 

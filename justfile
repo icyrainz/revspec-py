@@ -43,7 +43,9 @@ release bump="patch":
   uv run python -m build
   uv run python -m twine upload dist/*
   git push && git push --tags
-  gh release create "v${new}" --title "v${new}" --generate-notes
+  prev_tag=$(git tag --sort=-v:refname | sed -n '2p')
+  notes=$(git log "${prev_tag}..v${new}" --pretty=format:"- %s" --no-merges | grep -v "^- chore: bump version")
+  gh release create "v${new}" --title "v${new}" --notes "$notes"
   pipx install -e . --force
   echo "Published revspec ${new}"
 
