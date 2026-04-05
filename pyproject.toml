@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "revspec"
-version = "0.5.2"
+version = "0.5.3"
 description = "Terminal-based spec review tool with real-time AI conversation"
 readme = "README.md"
 license = "MIT"

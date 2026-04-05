@@ -71,6 +71,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         padding: 1 1 0 1;
         border-title-align: left;
         border-title-color: #89b4fa;
+        scrollbar-size: 0 0;
     }
     #comment-history {
         height: 1fr;
