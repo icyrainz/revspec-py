@@ -93,7 +93,9 @@ class CommentScreen(ModalScreen[CommentResult]):
     #comment-input {
         height: 1;
         min-height: 1;
+        max-height: 6;
         border: none;
+        scrollbar-size: 0 0;
     }
     #comment-context {
         height: 1;
@@ -305,6 +307,24 @@ class CommentScreen(ModalScreen[CommentResult]):
         elif key in ("shift+g", "G"):
             self._pending_g = False
             self.query_one("#comment-history", VerticalScroll).scroll_end()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Auto-expand input height as user types."""
+        self._resize_input()
+
+    def _resize_input(self) -> None:
+        textarea = self.query_one("#comment-input", TextArea)
+        max_h = 6
+        # Estimate available width for wrapping
+        content_width = textarea.size.width
+        if content_width < 1:
+            content_width = 40  # fallback before first layout
+        doc = textarea.document
+        visual_lines = 0
+        for i in range(doc.line_count):
+            line_text = doc.get_line(i)
+            visual_lines += max(1, -(-len(line_text) // content_width))  # ceil div
+        textarea.styles.height = max(1, min(visual_lines, max_h))
 
     def _clear_pending_g(self) -> None:
         self._pending_g = False

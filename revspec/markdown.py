@@ -147,28 +147,33 @@ def scan_table_blocks(spec_lines: list[str]) -> dict[int, TableBlock]:
     return blocks
 
 
-def render_table_border(text: Text, col_widths: list[int], position: str) -> None:
+def render_table_border(text: Text, col_widths: list[int], position: str, bg: str | None = None) -> None:
     """Append a top or bottom table border to Rich Text."""
+    if bg is None:
+        bg = THEME["crust"]
     if position == "top":
         left, mid, right = "\u250c", "\u252c", "\u2510"
     else:
         left, mid, right = "\u2514", "\u2534", "\u2518"
     parts = ["\u2500" * (w + 2) for w in col_widths]
-    text.append(left + mid.join(parts) + right, Style(color=THEME["text_dim"], bgcolor=THEME["crust"]))
+    text.append(left + mid.join(parts) + right, Style(color=THEME["text_dim"], bgcolor=bg))
 
 
-def render_table_separator(text: Text, col_widths: list[int]) -> None:
+def render_table_separator(text: Text, col_widths: list[int], bg: str | None = None) -> None:
     """Append a table separator row (├─┼─┤) to Rich Text."""
+    if bg is None:
+        bg = THEME["crust"]
     parts = ["\u2500" * (w + 2) for w in col_widths]
     text.append(
         "\u251c" + "\u253c".join(parts) + "\u2524",
-        Style(color=THEME["text_dim"], bgcolor=THEME["crust"]),
+        Style(color=THEME["text_dim"], bgcolor=bg),
     )
 
 
-def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_header: bool) -> None:
+def render_table_row(text: Text, cells: list[str], col_widths: list[int], is_header: bool, bg: str | None = None) -> None:
     """Append a table data/header row with padded cells to Rich Text."""
-    bg = THEME["crust"]
+    if bg is None:
+        bg = THEME["crust"]
     base_style = Style(color=THEME["text"], bold=is_header, bgcolor=bg)
     dim = Style(color=THEME["text_dim"], bgcolor=bg)
     for c, width in enumerate(col_widths):

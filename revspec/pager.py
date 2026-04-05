@@ -137,12 +137,7 @@ class SpecPager(ScrollView):
                     self._append_ghost_rows(rows, removed_text, content_width, ghost_content_width)
 
             table_block = self._table_blocks.get(i)
-            # Skip table rendering if table has diffs — render as raw text
-            is_table = (
-                table_block is not None
-                and not self.search_query
-                and not (diff_active and diff.affects_range(table_block.start_index, len(table_block.lines)))
-            )
+            is_table = table_block is not None and not self.search_query
 
             code_state_map[i] = in_code
 
@@ -259,10 +254,13 @@ class SpecPager(ScrollView):
         if row[0] == "table_border":
             _kind, spec_idx, position = row
             table_block = self._table_blocks.get(spec_idx) if self._table_blocks else None
+            is_cursor = (spec_idx + 1) == self.cursor_line
+            border_bg = self._line_bg(spec_idx, is_cursor)
+            g_bg = self._gutter_bg(spec_idx, is_cursor)
             text = Text()
-            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=THEME["crust"]))
+            text.append(gutter_blank, Style(color=THEME["text_dim"], bgcolor=g_bg))
             if table_block:
-                render_table_border(text, table_block.col_widths, position)
+                render_table_border(text, table_block.col_widths, position, bg=border_bg)
             return self._make_strip(text, width)
 
         # --- Ghost rows (diff removed) ---
@@ -373,11 +371,11 @@ class SpecPager(ScrollView):
         # Content
         if is_table:
             if rel_idx == table_block.separator_index:
-                render_table_separator(text, table_block.col_widths)
+                render_table_separator(text, table_block.col_widths, bg=cursor_bg)
             else:
                 is_header = table_block.separator_index >= 0 and rel_idx < table_block.separator_index
                 cells = parse_table_cells(line)
-                render_table_row(text, cells, table_block.col_widths, is_header)
+                render_table_row(text, cells, table_block.col_widths, is_header, bg=cursor_bg)
         else:
             content_style = line_style(line, in_code, is_cursor, bg=cursor_bg)
             content = line if line else " "
