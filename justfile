@@ -20,19 +20,32 @@ dev:
   uv venv && uv pip install hatchling editables && uv pip install -e ".[test,dev]" --no-build-isolation
   pipx install -e . --force
 
-# Build dist packages
-build:
+# Release: bump version, commit, tag, build, publish, push, update local install
+# Usage: just release patch  (or: minor, major)
+release bump="patch":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  current=$(grep '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+  IFS='.' read -r major minor patch <<< "$current"
+  case "{{bump}}" in
+    patch) patch=$((patch + 1)) ;;
+    minor) minor=$((minor + 1)); patch=0 ;;
+    major) major=$((major + 1)); minor=0; patch=0 ;;
+    *) echo "Usage: just release [patch|minor|major]"; exit 1 ;;
+  esac
+  new="${major}.${minor}.${patch}"
+  echo "Releasing: ${current} → ${new}"
+  sed -i '' "s/^version = \"${current}\"/version = \"${new}\"/" pyproject.toml
+  git add pyproject.toml
+  git commit -m "chore: bump version to ${new}"
+  git tag "v${new}"
   rm -rf dist/
   uv run python -m build
-
-# Publish to PyPI (builds first), then update global editable install
-publish: build
   uv run python -m twine upload dist/*
+  git push && git push --tags
+  gh release create "v${new}" --title "v${new}" --generate-notes
   pipx install -e . --force
-
-# Show what would be published
-check:
-  uv run python -m twine check dist/*
+  echo "Published revspec ${new}"
 
 # Record the demo GIF
 record-demo:
