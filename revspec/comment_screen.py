@@ -96,6 +96,7 @@ class CommentScreen(ModalScreen[CommentResult]):
         min-height: 1;
         max-height: 6;
         border: none;
+        overflow: hidden hidden;
         scrollbar-size: 0 0;
     }
     #comment-context {
@@ -326,6 +327,14 @@ class CommentScreen(ModalScreen[CommentResult]):
             line_text = doc.get_line(i)
             visual_lines += max(1, -(-len(line_text) // content_width))  # ceil div
         textarea.styles.height = max(1, min(visual_lines, max_h))
+        # When content fits, disable scrolling so TextArea's auto-scroll-to-cursor
+        # doesn't flash content out of view before the height update renders.
+        # When content exceeds max height, allow scrolling (scrollbar stays invisible
+        # via scrollbar-size: 0 0).
+        if visual_lines > max_h:
+            textarea.styles.overflow_y = "auto"
+        else:
+            textarea.styles.overflow_y = "hidden"
 
     def _clear_pending_g(self) -> None:
         self._pending_g = False
