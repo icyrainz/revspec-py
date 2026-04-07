@@ -20,7 +20,7 @@ dev:
   uv venv && uv pip install hatchling editables && uv pip install -e ".[test,dev]" --no-build-isolation
   pipx install -e . --force
 
-# Release: bump version, commit, tag, build, publish, push, update local install
+# Release: bump version, commit, tag, push, create GitHub release (CI publishes to PyPI)
 # Usage: just release patch  (or: minor, major)
 release bump="patch":
   #!/usr/bin/env bash
@@ -39,15 +39,12 @@ release bump="patch":
   git add pyproject.toml
   git commit -m "chore: bump version to ${new}"
   git tag "v${new}"
-  rm -rf dist/
-  uv run python -m build
-  uv run python -m twine upload dist/*
   git push && git push --tags
   prev_tag=$(git tag --sort=-v:refname | sed -n '2p')
   notes=$(git log "${prev_tag}..v${new}" --pretty=format:"- %s" --no-merges | grep -v "^- chore: bump version")
   gh release create "v${new}" --title "v${new}" --notes "$notes"
   pipx install -e . --force
-  echo "Published revspec ${new}"
+  echo "Released revspec ${new} (PyPI publish via CI)"
 
 # Record the demo GIF
 record-demo:
