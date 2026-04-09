@@ -52,7 +52,17 @@ Opens a TUI with vim-style navigation. Press `c` on any line to open a thread an
 
 ## Live AI Integration
 
-Revspec communicates with AI coding tools (Claude Code, etc.) via CLI subcommands:
+Revspec communicates with AI coding tools (Claude Code, etc.) via CLI subcommands. The integration requires **two concurrent processes**: the TUI (human-facing) and the watch/reply loop (AI-facing).
+
+### Setup
+
+The AI agent runs `revspec watch` in its own terminal while the human interacts with the TUI in a separate one. How the TUI gets launched depends on the environment:
+
+| Environment | What happens |
+|---|---|
+| **Claude Code plugin** (`/revspec`) | Automatic — detects tmux, kitty, WezTerm, ghostty, macOS terminals and spawns the TUI |
+| **tmux** | AI splits a pane: `tmux split-window -v "revspec spec.md"` |
+| **No multiplexer** | Open a second terminal tab/window and run `revspec spec.md` manually |
 
 ### `revspec watch <file.md>`
 
@@ -71,7 +81,7 @@ To reply: revspec reply spec.md x1a3f "<your response>"
 When done replying, run: revspec watch spec.md
 ```
 
-Watch exits on three events:
+Watch exits on four events:
 - **Comment/reply** — returns thread content for AI to respond
 - **Submit (`S`)** — returns resolved thread summaries for AI to rewrite the spec
 - **Approve (`A`)** — spec is finalized
@@ -85,8 +95,8 @@ Sends an AI reply that appears instantly in the reviewer's TUI.
 
 ```
 1. AI generates spec
-2. AI launches: revspec spec.md (in tmux pane)
-3. AI runs: revspec watch spec.md (blocks)
+2. AI launches the TUI in a separate terminal (tmux pane, new window, or manual)
+3. AI runs: revspec watch spec.md (blocks in its own terminal)
 4. Reviewer comments → AI replies → watch again
 5. Reviewer resolves threads → presses S (submit)
 6. Watch returns resolved thread summaries → AI rewrites spec

@@ -41,34 +41,24 @@ If ambiguous, ask the user which file to review.
 
 ## Step 2: Launch Revspec
 
-Check if running inside tmux:
+Revspec requires two concurrent processes: the TUI (human-facing) and the watch/reply loop (AI-facing). Detect the environment and launch the TUI in a separate terminal context.
+
+**Detection order:** check each condition top-to-bottom, use the first match.
 
 ```bash
-echo $TMUX
+echo "TMUX=$TMUX TERM=$TERM TERM_PROGRAM=$TERM_PROGRAM"
 ```
 
-**If tmux is available:**
-```bash
-# Split from Claude Code's own pane (not the user's active window)
-tmux split-window -t "$TMUX_PANE" -v "revspec <spec-file>"
-```
-
-**If no tmux, but on macOS:** detect the terminal and open a new window:
-
-```bash
-echo $TERM_PROGRAM
-```
-
-| `$TERM_PROGRAM` | Launch command |
+| Condition | Launch command |
 |---|---|
-| `Apple_Terminal` | `osascript -e 'tell application "Terminal" to do script "revspec <spec-file>"'` |
-| `iTerm.app` | `osascript -e 'tell application "iTerm2" to create window with default profile command "revspec <spec-file>"'` |
-| `WezTerm` | `wezterm start -- revspec <spec-file>` |
-| `ghostty` | `ghostty -e revspec <spec-file>` |
-| Other/unknown | Fall back to `osascript` with Terminal.app |
-
-**Otherwise (not macOS):**
-Tell the user: "Please run in another terminal: `revspec <spec-file>`"
+| `$TMUX` is set | `tmux split-window -t "$TMUX_PANE" -v "revspec <spec-file>"` |
+| `$TERM` = `xterm-kitty` | `kitty --directory <cwd> -e revspec <spec-file>` |
+| `$TERM_PROGRAM` = `WezTerm` | `wezterm start --cwd <cwd> -- revspec <spec-file>` |
+| `$TERM_PROGRAM` = `ghostty` | `ghostty -e revspec <spec-file>` |
+| `$TERM_PROGRAM` = `Apple_Terminal` | `osascript -e 'tell application "Terminal" to do script "cd <cwd> && revspec <spec-file>"'` |
+| `$TERM_PROGRAM` = `iTerm.app` | `osascript -e 'tell application "iTerm2" to create window with default profile command "cd <cwd> && revspec <spec-file>"'` |
+| macOS (none of the above) | Fall back to `osascript` with Terminal.app |
+| Otherwise | Tell the user: "Please run in another terminal: `revspec <spec-file>`" |
 
 ## Step 3: Run the Watch/Reply Loop
 
