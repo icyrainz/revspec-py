@@ -339,6 +339,7 @@ class ThreadListScreen(ModalScreen[int | None]):
                 items[old].set_classes("thread-item")
             if self.selected_idx < len(items):
                 items[self.selected_idx].set_classes("thread-item-selected")
+                items[self.selected_idx].scroll_visible()
 
 
 # ---------------------------------------------------------------------------
