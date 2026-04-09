@@ -45,7 +45,7 @@ Revspec requires two concurrent processes: the TUI (human-facing) and the watch/
 
 **Important:** Always resolve `<spec-file>` to an absolute path before launching. Some terminals open in a different working directory.
 
-**Detection order:** check each condition top-to-bottom, use the first match.
+**Detection order:** check each condition top-to-bottom, use the first match. Only use `$TMUX` to detect tmux — do NOT run `tmux display-message` or other tmux commands as a fallback, since a tmux server may be running elsewhere without this shell being inside it.
 
 ```bash
 echo "TMUX=$TMUX TERM=$TERM TERM_PROGRAM=$TERM_PROGRAM"
@@ -53,7 +53,7 @@ echo "TMUX=$TMUX TERM=$TERM TERM_PROGRAM=$TERM_PROGRAM"
 
 | Condition | Launch command |
 |---|---|
-| `$TMUX` is set | `tmux split-window -t "$TMUX_PANE" -v "revspec <spec-file>"` |
+| `$TMUX` is non-empty | `tmux split-window -t "$TMUX_PANE" -v "revspec <spec-file>"` |
 | `$TERM` = `xterm-kitty` | `kitty --directory <cwd> -e revspec <spec-file>` |
 | `$TERM_PROGRAM` = `WezTerm` | `wezterm start --cwd <cwd> -- revspec <spec-file>` |
 | `$TERM_PROGRAM` = `ghostty` | `ghostty -e revspec <spec-file>` |
