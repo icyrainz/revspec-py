@@ -43,6 +43,8 @@ If ambiguous, ask the user which file to review.
 
 Revspec requires two concurrent processes: the TUI (human-facing) and the watch/reply loop (AI-facing). Detect the environment and launch the TUI in a separate terminal context.
 
+**Important:** Always resolve `<spec-file>` to an absolute path before launching. Some terminals open in a different working directory.
+
 **Detection order:** check each condition top-to-bottom, use the first match.
 
 ```bash
@@ -55,8 +57,8 @@ echo "TMUX=$TMUX TERM=$TERM TERM_PROGRAM=$TERM_PROGRAM"
 | `$TERM` = `xterm-kitty` | `kitty --directory <cwd> -e revspec <spec-file>` |
 | `$TERM_PROGRAM` = `WezTerm` | `wezterm start --cwd <cwd> -- revspec <spec-file>` |
 | `$TERM_PROGRAM` = `ghostty` | `ghostty -e revspec <spec-file>` |
-| `$TERM_PROGRAM` = `Apple_Terminal` | `osascript -e 'tell application "Terminal" to do script "cd <cwd> && revspec <spec-file>"'` |
-| `$TERM_PROGRAM` = `iTerm.app` | `osascript -e 'tell application "iTerm2" to create window with default profile command "cd <cwd> && revspec <spec-file>"'` |
+| `$TERM_PROGRAM` = `Apple_Terminal` | `osascript -e 'tell application "Terminal" to do script "revspec <absolute-path-to-spec>"'` |
+| `$TERM_PROGRAM` = `iTerm.app` | `osascript -e 'tell application "iTerm2" to create window with default profile command "revspec <absolute-path-to-spec>"'` |
 | macOS (none of the above) | Fall back to `osascript` with Terminal.app |
 | Otherwise | Tell the user: "Please run in another terminal: `revspec <spec-file>`" |
 
